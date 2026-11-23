@@ -233,7 +233,8 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
         }
     }
 
-    val mpvPath = remember { MpvPlayer.locate() }
+    val mpvIntentos = remember { mutableIntStateOf(0) }
+    val mpvPath = remember(mpvIntentos.intValue) { MpvPlayer.locate() }
     var mpv by remember { mutableStateOf<MpvPlayer?>(null) }
     var hwnd by remember { mutableStateOf(0L) }
     var terminado by remember(payload) { mutableStateOf(false) }
@@ -440,7 +441,8 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
 
             if (sinVideo) {
                 // Sin superficie pesada todavía: aquí el estado sí se puede dibujar
-                if (errorMsg != null || (!resolviendo && mpvPath == null)) {
+                if (errorMsg != null) {
+                    val mensaje = errorMsg ?: ""
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Text(
                             "No se pudo reproducir",
@@ -449,11 +451,45 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
                         )
                         Spacer(Modifier.height(6.dp))
                         Text(
-                            errorMsg ?: "mpv no encontrado junto a la app",
+                            mensaje,
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(horizontal = 32.dp),
                         )
+                    }
+                } else if (!resolviendo && mpvPath == null) {
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(
+                            "Falta el reproductor mpv",
+                            style = MaterialTheme.typography.titleMedium,
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            "Windows usa mpv como motor de vídeo y no se incluye en la app " +
+                                "por su tamaño. Descárgalo y coloca mpv.exe en esta carpeta:",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 40.dp),
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            MpvPlayer.rutaSugerida(),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                        Spacer(Modifier.height(12.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            TextButton(onClick = {
+                                runCatching {
+                                    java.awt.Desktop.getDesktop().browse(
+                                        java.net.URI("https://mpv.io/installation/"),
+                                    )
+                                }
+                            }) { Text("Descargar mpv") }
+                            TextButton(onClick = { mpvIntentos.intValue++ }) {
+                                Text("Ya está instalado, reintentar")
+                            }
+                        }
                     }
                 } else {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {

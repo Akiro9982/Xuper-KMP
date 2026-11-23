@@ -282,23 +282,67 @@ class MpvPlayer(
     companion object {
         private const val PREFIJO = "XUPER "
 
-        /** Localiza mpv: recursos empaquetados, desarrollo o junto al .exe. */
+        /**
+         * Localiza `mpv.exe`. Como el binario no se versiona (pesa >100 MB), se buscan
+         * también las rutas habituales donde el usuario puede dejarlo.
+         *
+         * Orden: ruta explícita (propiedad o variable), recursos empaquetados, desarrollo,
+         * junto a la app, instalación por usuario, Program Files y PATH.
+         */
         fun locate(): String? {
             val recursos = System.getProperty("compose.application.resources.dir")
+            val appPath = System.getProperty("jpackage.app-path")
+            val appDir = appPath?.let { File(it).parentFile }
+            val localAppData = System.getenv("LOCALAPPDATA")
+            val programFiles = System.getenv("ProgramFiles")
+            val home = System.getProperty("user.home")
+
             val candidatos = buildList {
+                (System.getProperty("xuper.mpv") ?: System.getenv("XUPER_MPV"))
+                    ?.takeIf { it.isNotBlank() }
+                    ?.let { add(it) }
+
                 if (!recursos.isNullOrEmpty()) {
                     add(File(recursos, "mpv/mpv.exe").absolutePath)
                     add(File(recursos, "mpv.exe").absolutePath)
                 }
-                add("resources/windows/mpv/mpv.exe")  // desarrollo
-                add("mpv/mpv.exe")                    // junto al .exe
-                add("mpv.exe")
+
+                add("desktop/resources/windows/mpv/mpv.exe") // desarrollo desde la raíz
+                add("resources/windows/mpv/mpv.exe")         // desarrollo desde desktop/
+                add("mpv/mpv.exe")                           // junto al .exe
+                add("mpv.exe")                               // en el directorio actual
+
+                appDir?.let {
+                    add(File(it, "mpv/mpv.exe").absolutePath)
+                    add(File(it, "resources/mpv/mpv.exe").absolutePath)
+                    add(File(it, "mpv.exe").absolutePath)
+                }
+
+                // Instalación manual recomendada (sin permisos de administrador).
+                if (!localAppData.isNullOrEmpty()) {
+                    add(File(localAppData, "Xuper/mpv/mpv.exe").absolutePath)
+                    add(File(localAppData, "Programs/mpv/mpv.exe").absolutePath)
+                }
+                if (!home.isNullOrEmpty()) add(File(home, ".xuper/mpv/mpv.exe").absolutePath)
+                if (!programFiles.isNullOrEmpty()) add(File(programFiles, "mpv/mpv.exe").absolutePath)
+
+                // Una instalación de mpv añadida al PATH.
+                System.getenv("PATH")
+                    ?.split(File.pathSeparatorChar)
+                    ?.filter { it.isNotBlank() }
+                    ?.forEach { add(File(it, "mpv.exe").absolutePath) }
             }
-            for (c in candidatos) {
-                val f = File(c)
-                if (f.exists()) return f.absolutePath
-            }
-            return null
+
+            return candidatos
+                .distinct()
+                .firstOrNull { File(it).isFile }
+        }
+
+        /** Ruta sugerida para dejar mpv.exe si se descarga aparte. */
+        fun rutaSugerida(): String {
+            val base = System.getenv("LOCALAPPDATA")
+                ?: System.getProperty("user.home")
+            return File(base, "Xuper/mpv/mpv.exe").absolutePath
         }
 
         /** HWND de un java.awt.Component (Canvas dentro de Compose). */
