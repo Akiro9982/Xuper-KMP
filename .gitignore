@@ -1,0 +1,74 @@
+# ---------------------------------------------------------------------------
+# Xuper-KMP — solo se versiona el código y los recursos del proyecto
+# ---------------------------------------------------------------------------
+
+# Gradle
+.gradle/
+gradle-app.setting
+!gradle/wrapper/gradle-wrapper.jar
+.gradlew.bat.lck
+.gradlew.lck
+build/
+**/build/
+
+# Kotlin
+.kotlin/
+*.kotlin_module
+
+# Configuración local de la máquina (rutas del SDK, etc.)
+local.properties
+
+# Android
+captures/
+.cxx/
+.externalNativeBuild/
+*.apk
+*.aab
+*.ap_
+*.dex
+*.class
+*.hprof
+output-metadata.json
+lint-results*.html
+lint-results*.xml
+
+# Compose Desktop / instaladores generados
+desktop/build/
+*.msi
+
+# mpv no se versiona por tamaño: se descarga aparte
+# (instrucciones en desktop/resources/windows/mpv/README.md)
+desktop/resources/windows/mpv/mpv.exe
+desktop/resources/windows/mpv/*.dll
+desktop/resources/windows/mpv/*.zip
+desktop/resources/windows/mpv/*.7z
+*.dmg
+*.deb
+*.rpm
+*.pkg
+
+# Firmas (nunca subir claves privadas)
+*.jks
+*.keystore
+keystore.properties
+signing.properties
+
+# IDE (IntelliJ IDEA / Android Studio)
+.idea/
+*.iml
+*.ipr
+*.iws
+out/
+
+# Registros y temporales
+*.log
+*.tmp
+*.swp
+*.stackdump
+hs_err_pid*
+
+# Sistema operativo
+.DS_Store
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/

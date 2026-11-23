@@ -1,0 +1,73 @@
+package com.xuperclean.tv.data
+
+import android.content.Context
+import android.content.SharedPreferences
+import com.xuperclean.core.WatchHistory
+import com.xuperclean.core.WatchProgress
+
+/** Historial de "Continuar viendo" local del televisor (#8). */
+object WatchStore {
+
+    private const val PREFS = "xuper-watch"
+    private const val KEY = "continue_watching"
+
+    private var prefs: SharedPreferences? = null
+
+    fun init(context: Context) {
+        if (prefs == null) {
+            prefs = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        }
+    }
+
+    private fun leer(): List<WatchProgress> =
+        WatchHistory.decode(prefs?.getString(KEY, null))
+
+    fun resumable(): List<WatchProgress> = WatchHistory.resumable(leer())
+
+    fun save(progress: WatchProgress) {
+        val p = prefs ?: return
+        val lista = WatchHistory.upsert(leer(), progress)
+        p.edit().putString(KEY, WatchHistory.encode(lista)).apply()
+    }
+
+    fun remove(assetId: String) {
+        val p = prefs ?: return
+        val lista = leer().filterNot { it.assetId == assetId }
+        p.edit().putString(KEY, WatchHistory.encode(lista)).apply()
+    }
+
+    fun find(assetId: String): WatchProgress? = WatchHistory.find(leer(), assetId)
+
+    fun findEpisode(episodeId: String): WatchProgress? =
+        WatchHistory.findEpisode(leer(), episodeId)
+
+    // ------------------------------------------------- preferencias de reproducción
+
+    private const val KEY_AUDIO = "audio_language"
+
+    /** Idioma de audio preferido (por defecto latino). */
+    var audioLanguage: String
+        get() = prefs?.getString(KEY_AUDIO, com.xuperclean.core.AudioTracks.PREFERENCIA_POR_DEFECTO)
+            ?: com.xuperclean.core.AudioTracks.PREFERENCIA_POR_DEFECTO
+        set(value) {
+            prefs?.edit()?.putString(KEY_AUDIO, value)?.apply()
+        }
+
+    // ------------------------------------------------- conexión del portal
+
+    private const val KEY_PORTAL = "portal_profile"
+    private const val KEY_IDENTITY = "portal_identity"
+
+    /** Valores de conexión aprendidos (build aceptado, clave…), en JSON. */
+    fun portalProfile(): String? = prefs?.getString(KEY_PORTAL, null)
+
+    fun savePortalProfile(json: String) {
+        prefs?.edit()?.putString(KEY_PORTAL, json)?.apply()
+    }
+
+    fun identity(): String? = prefs?.getString(KEY_IDENTITY, null)
+
+    fun saveIdentity(json: String) {
+        prefs?.edit()?.putString(KEY_IDENTITY, json)?.apply()
+    }
+}
