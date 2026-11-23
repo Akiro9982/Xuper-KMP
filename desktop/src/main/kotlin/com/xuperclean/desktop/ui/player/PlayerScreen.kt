@@ -60,9 +60,6 @@ import com.xuperclean.desktop.player.MpvSurface
 import com.xuperclean.desktop.ui.theme.XuperTheme
 import kotlin.math.roundToInt
 
-import androidx.compose.animation.Animatable
-import androidx.compose.animation.tween
-
 /** Qué reproducir (mismo contrato que móvil). */
 sealed interface PlayerPayload {    val title: String
 
