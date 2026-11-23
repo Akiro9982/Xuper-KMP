@@ -1,14 +1,10 @@
 package com.xuperclean.tv.ui
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -18,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Animation
 import androidx.compose.material.icons.filled.ChildFriendly
@@ -29,6 +26,7 @@ import androidx.compose.material.icons.filled.SmartDisplay
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -39,6 +37,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.ClickableSurfaceDefaults
 import androidx.tv.material3.Surface
@@ -84,11 +84,39 @@ private fun iconOf(tab: Tab) = when (tab) {
 
 @Composable
 fun AppRoot() {
+    // Escala de TV: se diseña sobre un lienzo virtual de 1024 dp de ancho (16:9).
+    // En cualquier resolución —720p, 1080p, 4K o un panel que reporte otra densidad—
+    // texto, iconos, separación y foco crecen o decrecen juntos, así que la interfaz
+    // mantiene las mismas proporciones y nunca queda amontonada.
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+        val factor = (maxWidth.value / 1024f).coerceIn(0.5f, 3f)
+        val base = LocalDensity.current
+        CompositionLocalProvider(
+            LocalDensity provides Density(base.density * factor, base.fontScale),
+        ) {
+            TvContent()
+        }
+    }
+}
+
+@Composable
+private fun TvContent() {
     var tab by remember { mutableStateOf<Tab>(Tab.Destacados) }
     val stack = remember { mutableStateListOf<Overlay>() }
 
     fun pop() {
         if (stack.isNotEmpty()) stack.removeAt(stack.lastIndex)
+    }
+
+    /**
+     * El panel lateral siempre es navegación de primer nivel: al elegir una pestaña
+     * se cierra cualquier detalle/reproductor apilado. Antes solo cambiaba `tab`
+     * por debajo del detalle, así que el usuario seguía viendo la ficha anterior
+     * hasta pulsar Atrás.
+     */
+    fun irATab(destino: Tab) {
+        stack.clear()
+        tab = destino
     }
 
     BackHandler(enabled = stack.isNotEmpty()) { pop() }
@@ -102,18 +130,13 @@ fun AppRoot() {
     }
 
     Row(Modifier.fillMaxSize()) {
-        SideNav(tab = tab, onSelect = { tab = it })
-        AnimatedContent(
-            targetState = overlay ?: tab,
-            transitionSpec = {
-                // motion leve y funcional: fundido + escala mínima (200 ms)
-                (fadeIn(animationSpec = tween(200)) + scaleIn(initialScale = 0.985f, animationSpec = tween(200)))
-                    .togetherWith(fadeOut(animationSpec = tween(150)))
-            },
-            label = "content",
-            modifier = Modifier.fillMaxSize(),
-        ) { state ->
-            when (state) {
+        SideNav(tab = tab, onSelect = ::irATab)
+        // Sin transición entre pantallas: en paneles de 1 GB, animar la pantalla
+        // saliente y la entrante a la vez duplica la composición y las descargas de
+        // pósters, justo cuando el usuario percibe el cambio como «lento». El cambio
+        // directo libera la pantalla anterior y cancela sus cargas de imagen.
+        Box(Modifier.fillMaxSize()) {
+            when (val state = overlay ?: tab) {
                 is Overlay.Detail -> DetailScreen(
                     asset = state.asset,
                     onPlay = { payload -> stack.add(Overlay.Player(payload)) },
@@ -146,10 +169,10 @@ private fun SideNav(tab: Tab, onSelect: (Tab) -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxHeight()
-            .width(210.dp)
+            .width(240.dp)
             .background(MaterialTheme.colorScheme.surface)
-            .padding(vertical = 24.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
+            .padding(vertical = 30.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         TABS.forEach { t ->
             val selected = tab == t
@@ -164,9 +187,9 @@ private fun SideNav(tab: Tab, onSelect: (Tab) -> Unit) {
             Surface(
                 onClick = { onSelect(t) },
                 modifier = Modifier
-                    .padding(horizontal = 16.dp)
+                    .padding(horizontal = 18.dp)
                     .fillMaxWidth()
-                    .height(52.dp)
+                    .height(56.dp)
                     .onFocusChanged { enfocado = it.isFocused },
                 colors = tvCardColors(
                     containerColor = if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent,
@@ -176,14 +199,15 @@ private fun SideNav(tab: Tab, onSelect: (Tab) -> Unit) {
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.padding(horizontal = 14.dp),
+                    modifier = Modifier.padding(horizontal = 16.dp),
                 ) {
                     Icon(
                         imageVector = iconOf(t),
                         contentDescription = null,
                         tint = colorTexto,
+                        modifier = Modifier.size(26.dp),
                     )
-                    Spacer(Modifier.width(12.dp))
+                    Spacer(Modifier.width(16.dp))
                     Text(
                         text = t.label,
                         style = MaterialTheme.typography.labelLarge,

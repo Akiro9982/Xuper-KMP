@@ -11,12 +11,15 @@ import coil3.network.okhttp.OkHttpNetworkFetcherFactory
 import coil3.request.allowRgb565
 import coil3.request.crossfade
 import com.xuperclean.tv.net.NetProvider
+import kotlinx.coroutines.Dispatchers
 
 /**
  * Application: configura el cargador de imágenes para gama baja.
  * - Memoria limitada (25 %): menos presión en dispositivos de 1 GB.
  * - RGB_565 para pósters: la mitad de memoria por imagen.
  * - Sin crossfade: menos GPU y menos redibujados.
+ * - Descargas/decodificación limitadas: en un panel de 1 GB no conviene que 20
+ *   pósters se decodifiquen a la vez mientras el usuario mueve el D-pad.
  * - Caché de disco (128 MB) para no re-descargar pósters.
  * - Mismo OkHttpClient (DNS resiliente DoH) que el portal y el player.
  */
@@ -38,5 +41,7 @@ class XuperTvApp : Application(), SingletonImageLoader.Factory {
             }
             .allowRgb565(true)
             .crossfade(false)
+            .fetcherCoroutineContext(Dispatchers.IO.limitedParallelism(4))
+            .decoderCoroutineContext(Dispatchers.IO.limitedParallelism(2))
             .build()
 }

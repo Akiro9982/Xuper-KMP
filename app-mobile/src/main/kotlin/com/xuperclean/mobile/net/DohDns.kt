@@ -59,7 +59,9 @@ class DohDns(
 
     private fun dohLookup(host: String, resolver: String): List<InetAddress> {
         // cliente mínimo SIN DNS (la URL es una IP literal)
+        val tls = com.xuperclean.core.net.LegacyTls.config
         val client = okhttp3.OkHttpClient.Builder()
+            .sslSocketFactory(tls.socketFactory, tls.trustManager)
             .connectTimeout(5_000, java.util.concurrent.TimeUnit.MILLISECONDS)
             .readTimeout(5_000, java.util.concurrent.TimeUnit.MILLISECONDS)
             .build()

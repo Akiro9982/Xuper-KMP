@@ -26,8 +26,9 @@ import com.xuperclean.core.model.VodAsset
 /**
  * Póster con degradado inferior (para leer el título) y fallback tipográfico.
  *
- * [variant]: "icon" (262x370, ligero) para tarjetas/filas — los pósters completos
- * pesan ~3 MB y arruinan el rendimiento en gama baja; "poster"/"stage" para hero/detalle.
+ * Calidad: "icon" (262x370, ligero) para tarjetas/filas — los "stage" completos
+ * pesan ~3 MB y arruinan el rendimiento en gama baja. Solo el hero y la cabecera de
+ * detalle piden "poster" (antes que "stage"), porque son una única imagen grande.
  * Sin crossfade; el degradado es un Brush precalculado.
  */
 
@@ -53,7 +54,7 @@ fun PosterImage(
     subtitle: String? = null,
 ) {
     val poster = if (light) asset.posterFor("icon", "poster", "stage")
-                 else asset.posterFor("stage", "poster", "icon")
+                 else asset.posterFor("poster", "stage", "icon")
     var failed by remember(asset.contentId) { mutableStateOf(false) }
 
     Box(modifier.clip(RoundedCornerShape(8.dp))) {

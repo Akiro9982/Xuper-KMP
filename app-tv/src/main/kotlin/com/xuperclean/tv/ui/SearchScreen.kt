@@ -105,7 +105,7 @@ private fun SearchGrid(items: List<com.xuperclean.core.SearchResult>, onOpenAsse
                         asset = resultado.cardAsset,
                         modifier = Modifier.fillMaxSize(),
                         showTitle = true,
-                        light = false,
+                        light = true,
                     )
                 }
             }

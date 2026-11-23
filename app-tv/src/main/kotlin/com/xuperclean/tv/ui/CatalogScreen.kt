@@ -102,7 +102,7 @@ private fun GridCard(asset: VodAsset, onOpenAsset: (VodAsset) -> Unit) {
             .aspectRatio(16f / 9f),
     ) {
         Box {
-            PosterImage(asset = asset, modifier = Modifier.fillMaxSize(), showTitle = true, light = false)
+            PosterImage(asset = asset, modifier = Modifier.fillMaxSize(), showTitle = true, light = true)
         }
     }
 }

@@ -36,6 +36,7 @@ import androidx.compose.ui.unit.dp
 import androidx.tv.material3.ClickableSurfaceDefaults
 import androidx.tv.material3.FilterChip
 import androidx.tv.material3.Surface
+import androidx.tv.material3.Text as TvText
 import androidx.tv.material3.Button
 import androidx.tv.material3.OutlinedButton
 import kotlinx.coroutines.launch
@@ -52,6 +53,7 @@ import com.xuperclean.tv.ui.common.UiState
 import com.xuperclean.tv.ui.common.rememberAsync
 import com.xuperclean.tv.ui.player.PlayerPayload
 import com.xuperclean.tv.ui.theme.tvCardColors
+import com.xuperclean.tv.ui.theme.tvChipColors
 
 private val DetailScrim = Brush.verticalGradient(
     0f to Color.Black.copy(alpha = 0.15f),
@@ -114,6 +116,7 @@ private fun DetailContent(
     val columnasEp = ((maxWidth - 64.dp + separacionEp) / (130.dp + separacionEp)).toInt().coerceAtLeast(3)
     val anchoEp = (maxWidth - 64.dp - separacionEp * (columnasEp - 1)) / columnasEp
     val filasEp = episodios.chunked(columnasEp)
+    val chipColors = tvChipColors()
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(bottom = 24.dp),
@@ -179,7 +182,8 @@ private fun DetailContent(
                             FilterChip(
                                 selected = temporada.asset.contentId == asset.contentId,
                                 onClick = { onSelectSeason(temporada.asset) },
-                                content = { Text(temporada.label) },
+                                colors = chipColors,
+                                content = { TvText(temporada.label) },
                             )
                         }
                     }
@@ -350,7 +354,7 @@ private fun RelatedRow(asset: VodAsset, onOpenAsset: (VodAsset) -> Unit, onPlay:
                                 .width(220.dp)
                                 .height(124.dp),
                         ) {
-                            PosterImage(asset = rel, modifier = Modifier.fillMaxSize(), showTitle = true, light = false)
+                            PosterImage(asset = rel, modifier = Modifier.fillMaxSize(), showTitle = true, light = true)
                         }
                     }
                 }

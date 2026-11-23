@@ -84,6 +84,8 @@ object XuperRepository {
     private val stateMutex = Mutex()
     private var slbCache: SlbInfo? = null
     private var liveChannelsCache: List<Channel>? = null
+    private var liveCategoriesCache: List<ColumnInfo>? = null
+    private val liveColumnCache = mutableMapOf<Long, List<Channel>>()
     private var homeCache: NextColumnsData? = null
 
     suspend fun session(): ActiveData {
@@ -131,15 +133,24 @@ object XuperRepository {
      * Categorías reales del árbol LIVE del portal (#3): 38 nodos, de los que se
      * descarta `ChannelList` (76182), que es la lista plana ya mostrada en «Todos».
      */
-    suspend fun liveCategories(): List<ColumnInfo> =
-        sessionManager.withKickRetry { s ->
+    suspend fun liveCategories(): List<ColumnInfo> = stateMutex.withLock {
+        liveCategoriesCache ?: sessionManager.withKickRetry { s ->
             client.columnContents(s.account, config.liveTreeColumnId).childColumnList
                 .filterNot { it.id == config.liveColumnId }
+                .also { liveCategoriesCache = it }
         }
+    }
 
-    /** Canales de una categoría concreta del árbol LIVE (#3). */
-    suspend fun liveChannelsPorColumna(columnId: Long): List<Channel> =
-        sessionManager.withKickRetry { s -> client.liveData(s.account, columnId = columnId) }
+    /**
+     * Canales de una categoría concreta del árbol LIVE (#3).
+     * Se cachean por columna: volver a una categoría ya vista no repite la petición,
+     * que en la TV de gama baja es el tramo más lento al navegar por la guía.
+     */
+    suspend fun liveChannelsPorColumna(columnId: Long): List<Channel> = stateMutex.withLock {
+        liveColumnCache[columnId] ?: sessionManager.withKickRetry { s ->
+            client.liveData(s.account, columnId = columnId).also { liveColumnCache[columnId] = it }
+        }
+    }
 
     /** Filas del home VOD (cacheadas en memoria, con recuperación de kick). */
     suspend fun homeRows(): NextColumnsData = stateMutex.withLock {

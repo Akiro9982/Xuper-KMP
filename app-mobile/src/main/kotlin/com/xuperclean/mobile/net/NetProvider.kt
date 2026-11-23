@@ -1,6 +1,7 @@
 package com.xuperclean.mobile.net
 
 import com.xuperclean.core.net.HttpEngine
+import com.xuperclean.core.net.LegacyTls
 import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
 
@@ -14,8 +15,10 @@ object NetProvider {
     val dns: DohDns by lazy { DohDns() }
 
     val okHttpClient: OkHttpClient by lazy {
+        val tls = LegacyTls.config
         OkHttpClient.Builder()
             .dns(dns)
+            .sslSocketFactory(tls.socketFactory, tls.trustManager)
             .connectTimeout(10, TimeUnit.SECONDS)
             .readTimeout(25, TimeUnit.SECONDS)
             .followRedirects(true)

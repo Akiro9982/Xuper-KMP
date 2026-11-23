@@ -185,7 +185,7 @@ private fun ContinueCard(item: WatchProgress, onResume: (WatchProgress) -> Unit)
                 asset = asset,
                 modifier = Modifier.fillMaxSize(),
                 showTitle = true,
-                light = false,
+                light = true,
                 subtitle = subtitulo,
             )
             Box(
@@ -215,6 +215,6 @@ private fun RowCard(asset: VodAsset, onOpenAsset: (VodAsset) -> Unit) {
             .height(150.dp)
             .width(266.dp),
     ) {
-        PosterImage(asset = asset, modifier = Modifier.fillMaxSize(), showTitle = true, light = false)
+        PosterImage(asset = asset, modifier = Modifier.fillMaxSize(), showTitle = true, light = true)
     }
 }
