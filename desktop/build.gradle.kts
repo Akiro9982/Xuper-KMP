@@ -90,6 +90,7 @@ compose.desktop {
             appResourcesRootDir.set(project.layout.projectDirectory.dir("resources"))
 
             windows {
+                iconFile.set(project.file("icons/xuper.ico"))
                 menuGroup = "Xuper"
                 shortcut = true
                 dirChooser = true

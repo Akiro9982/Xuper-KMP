@@ -72,3 +72,6 @@ hs_err_pid*
 Thumbs.db
 desktop.ini
 $RECYCLE.BIN/
+
+# Fuente del icono (los derivados optimizados ya viven en res/ y desktop/)
+iconoproyecto.png
