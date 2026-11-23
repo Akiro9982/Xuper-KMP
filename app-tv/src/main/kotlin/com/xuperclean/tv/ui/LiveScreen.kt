@@ -147,7 +147,7 @@ private fun ChannelGrid(
 @Composable
 private fun ChannelCard(channel: Channel, onClick: () -> Unit) {
     // tv-material publica su propio LocalContentColor y material3.Text no lo lee: con el
-    // contenedor de foco rojo el texto caería a negro y desaparecería.
+    // contenedor de foco violeta el texto caería a negro y desaparecería.
     var enfocado by remember { mutableStateOf(false) }
     Surface(
         onClick = onClick,

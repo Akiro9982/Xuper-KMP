@@ -103,7 +103,7 @@ private fun iconOf(tab: Tab) = when (tab) {
 }
 
 @Composable
-fun AppRoot() {
+fun AppRoot(window: java.awt.Window, windowState: androidx.compose.ui.window.WindowState) {
     var tab by remember { mutableStateOf<Tab>(Tab.Destacados) }
     val stack = remember { mutableStateListOf<Overlay>() }
 
@@ -112,7 +112,7 @@ fun AppRoot() {
     val overlay = stack.lastOrNull()
 
     if (overlay is Overlay.Player) {
-        PlayerScreen(payload = overlay.payload, onClose = { pop() })
+        PlayerScreen(payload = overlay.payload, window = window, windowState = windowState, onClose = { pop() })
         return
     }
 

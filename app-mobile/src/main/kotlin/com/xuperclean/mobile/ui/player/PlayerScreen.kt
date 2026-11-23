@@ -3,13 +3,21 @@ package com.xuperclean.mobile.ui.player
 import android.view.ViewGroup
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.fadeIn
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.material.icons.filled.FullscreenExit
+import androidx.compose.material.icons.filled.Replay10
+import androidx.compose.material.icons.filled.Forward10
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -375,6 +383,8 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
     var inmersivo by remember { mutableStateOf(false) }
     var sliderPos by remember { mutableFloatStateOf(0f) }
     var dragging by remember { mutableStateOf(false) }
+    var interactionTick by remember { mutableIntStateOf(0) }
+    fun touchControls() { controlsVisible = true; interactionTick++ }
 
     LaunchedEffect(player) {
         while (true) {
@@ -396,11 +406,12 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
         }
     }
 
-    LaunchedEffect(controlsVisible) {
-        if (controlsVisible) {
+    LaunchedEffect(controlsVisible, interactionTick, isPlaying, dragging, verAjustes, errorMsg) {
+        if (controlsVisible && isPlaying && !dragging && !verAjustes && errorMsg == null) {
             delay(4000)
             controlsVisible = false
         }
+        if (!isPlaying || verAjustes || errorMsg != null) controlsVisible = true
     }
 
     BackHandler {
@@ -410,11 +421,7 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
     Box(
         Modifier
             .fillMaxSize()
-            .background(Color.Black)
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-            ) { controlsVisible = !controlsVisible },
+            .background(Color.Black),
     ) {
         if (streamUrl != null) {
             AndroidView(
@@ -431,6 +438,28 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
                 },
                 update = { it.player = player },
                 modifier = Modifier.fillMaxSize(),
+            )
+            // Capa transparente por encima de la SurfaceView: un toque alterna los
+            // controles y un doble toque salta ±10 s. Sin ella, la vista nativa
+            // consume los gestos y el reproductor parece no responder.
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .pointerInput(player, isLive) {
+                        detectTapGestures(
+                            onTap = { controlsVisible = !controlsVisible; interactionTick++ },
+                            onDoubleTap = { point ->
+                                touchControls()
+                                if (!isLive && player.duration > 0) {
+                                    val delta = if (point.x < size.width / 2) -10_000L else 10_000L
+                                    player.seekTo(
+                                        (player.currentPosition + delta)
+                                            .coerceIn(0L, player.duration),
+                                    )
+                                }
+                            },
+                        )
+                    },
             )
         } else if (resolviendo) {
             Column(
@@ -493,14 +522,15 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
 
         AnimatedVisibility(
             visible = controlsVisible,
-            enter = fadeIn(),
-            exit = fadeOut(),
+            enter = fadeIn() + slideInVertically { it / 4 },
+            exit = fadeOut() + slideOutVertically { it / 4 },
             modifier = Modifier.align(Alignment.BottomStart),
         ) {
             Column(
                 Modifier
                     .fillMaxWidth()
-                    .background(Color.Black.copy(alpha = 0.60f))
+                    .background(Brush.verticalGradient(listOf(Color(0xE6100B19), Color(0xFF100B19))))
+                    .navigationBarsPadding()
                     .padding(horizontal = 16.dp, vertical = 10.dp),
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -509,18 +539,20 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
                         style = MaterialTheme.typography.titleMedium,
                         color = Color.White,
                         modifier = Modifier.weight(1f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
-                    IconButton(onClick = { verAjustes = true }) {
+                    IconButton(onClick = { touchControls(); verAjustes = true }) {
                         Icon(
                             Icons.Filled.Settings,
                             contentDescription = "Ajustes de reproducción",
                             tint = Color.White,
                         )
                     }
-                    IconButton(onClick = { inmersivo = !inmersivo }) {
+                    IconButton(onClick = { touchControls(); inmersivo = !inmersivo }) {
                         Icon(
-                            Icons.Filled.Fullscreen,
-                            contentDescription = "Pantalla completa",
+                            if (inmersivo) Icons.Filled.FullscreenExit else Icons.Filled.Fullscreen,
+                            contentDescription = if (inmersivo) "Salir de pantalla completa" else "Pantalla completa",
                             tint = Color.White,
                         )
                     }
@@ -547,6 +579,7 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
                     Slider(
                         value = sliderPos,
                         onValueChange = {
+                            touchControls()
                             dragging = true
                             sliderPos = it
                         },
@@ -578,13 +611,34 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
                     }
                 }
                 Spacer(Modifier.height(6.dp))
-                IconButton(onClick = { if (player.isPlaying) player.pause() else player.play() }) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterHorizontally),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                if (!isLive) IconButton(
+                    enabled = durationMs > 0,
+                    onClick = { touchControls(); player.seekTo((player.currentPosition - 10_000).coerceAtLeast(0)) },
+                ) {
+                    Icon(Icons.Filled.Replay10, "Retroceder 10 segundos", tint = MaterialTheme.colorScheme.primary)
+                }
+                androidx.compose.material3.FilledIconButton(onClick = {
+                    touchControls()
+                    if (player.isPlaying) player.pause() else player.play()
+                }) {
                     Icon(
                         imageVector = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
                         contentDescription = if (isPlaying) "Pausar" else "Reproducir",
-                        tint = Color.White,
-                        modifier = Modifier.size(36.dp),
+                        tint = MaterialTheme.colorScheme.onPrimary,
+                        modifier = Modifier.size(32.dp),
                     )
+                }
+                if (!isLive) IconButton(
+                    enabled = durationMs > 0,
+                    onClick = { touchControls(); player.seekTo((player.currentPosition + 10_000).coerceAtMost(durationMs)) },
+                ) {
+                    Icon(Icons.Filled.Forward10, "Avanzar 10 segundos", tint = MaterialTheme.colorScheme.primary)
+                }
                 }
             }
         }
@@ -605,6 +659,21 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
             onEscala = { escalaSub = it },
             onDismiss = { verAjustes = false },
         )
+    }
+
+    // Restaurar la ventana al salir, incluso si se cierra en modo inmersivo.
+    DisposableEffect(context) {
+        val window = (context as? android.app.Activity)?.window
+        val hadKeepScreenOn = window?.attributes?.flags?.and(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) != 0
+        window?.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        onDispose {
+            if (window != null) {
+                if (!hadKeepScreenOn) window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, true)
+                androidx.core.view.WindowInsetsControllerCompat(window, window.decorView)
+                    .show(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+            }
+        }
     }
 
     // inmersivo: ocultar barras del sistema

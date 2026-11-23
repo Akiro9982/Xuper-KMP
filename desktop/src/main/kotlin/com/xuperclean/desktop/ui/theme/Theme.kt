@@ -13,29 +13,29 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 /** Tema Material 3 (dark) de escritorio — mismos tokens que TV/móvil. */
-private val Primary = Color(0xAE0EFF)
-private val OnPrimary = Color(0xFFFFFFFF)
-private val PrimaryContainer = Color(0xFF6A0DAD)
-private val OnPrimaryContainer = Color(0xFFFFDAD6)
-private val Secondary = Color(0xFFFFC8DD)
-private val OnSecondary = Color(0xFF442925)
-private val SecondaryContainer = Color(0xFF5D3F3B)
-private val OnSecondaryContainer = Color(0xFFFFDAD4)
-private val Tertiary = Color(0xFFF2E6F5)
-private val OnTertiary = Color(0xFF3C2F16)
+private val Primary = Color(0xFFCDB4FF)
+private val OnPrimary = Color(0xFF261047)
+private val PrimaryContainer = Color(0xFF6335A2)
+private val OnPrimaryContainer = Color(0xFFF6EDFF)
+private val Secondary = Color(0xFFD0C2E0)
+private val OnSecondary = Color(0xFF30243F)
+private val SecondaryContainer = Color(0xFF49365F)
+private val OnSecondaryContainer = Color(0xFFF0E3FF)
+private val Tertiary = Color(0xFFBFC2FF)
+private val OnTertiary = Color(0xFF242653)
 private val Surface = Color(0xFF0E0E12)
 private val SurfaceContainerLowest = Color(0xFF090910)
 private val SurfaceContainerLow = Color(0xFF16161B)
 private val SurfaceContainer = Color(0xFF1A1A20)
 private val SurfaceContainerHigh = Color(0xFF24242B)
 private val SurfaceContainerHighest = Color(0xFF2F2F36)
-private val OnSurface = Color(0xFFE5E1E6)
-private val OnSurfaceVariant = Color(0xFFA9A3AC)
+private val OnSurface = Color(0xFFF6F1FA)
+private val OnSurfaceVariant = Color(0xFFCCC3D6)
 private val Outline = Color(0xFF73737E)
 private val OutlineVariant = Color(0xFF2F2F36)
-private val Error = Color(0xAE0EFF)
-private val OnError = Color(0xFFFFFFFF)
-private val ErrorContainer = Color(0xFF6A0DAD)
+private val Error = Color(0xFFFFB4AB)
+private val OnError = Color(0xFF690005)
+private val ErrorContainer = Color(0xFF93000A)
 private val OnErrorContainer = Color(0xFFFFDAD6)
 
 private val XuperDarkScheme = darkColorScheme(
@@ -96,6 +96,11 @@ fun XuperTheme(content: @Composable () -> Unit) {
         colorScheme = XuperDarkScheme,
         typography = XuperTypography,
         shapes = XuperShapes,
-        content = content,
+        content = {
+            androidx.compose.runtime.CompositionLocalProvider(
+                androidx.compose.material3.LocalContentColor provides OnSurface,
+                content = content,
+            )
+        },
     )
 }

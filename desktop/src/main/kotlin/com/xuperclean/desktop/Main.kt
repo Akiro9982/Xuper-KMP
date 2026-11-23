@@ -7,6 +7,7 @@ import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.WindowPosition
 import androidx.compose.ui.window.WindowState
 import androidx.compose.ui.window.application
+import androidx.compose.ui.window.rememberWindowState
 import com.xuperclean.desktop.ui.AppRoot
 import com.xuperclean.desktop.ui.theme.XuperTheme
 import java.awt.Image
@@ -18,13 +19,14 @@ private val iconoVentana: Image? by lazy {
 }
 
 fun main() = application {
+    val windowState = rememberWindowState(
+        size = DpSize(1240.dp, 720.dp),
+        position = WindowPosition.Aligned(androidx.compose.ui.Alignment.Center),
+    )
     Window(
         onCloseRequest = ::exitApplication,
         title = "Xuper",
-        state = WindowState(
-            size = DpSize(1240.dp, 720.dp),
-            position = WindowPosition.Aligned(androidx.compose.ui.Alignment.Center),
-        ),
+        state = windowState,
     ) {
         LaunchedEffect(Unit) {
             // evita el destello blanco antes del primer frame de Compose
@@ -33,7 +35,7 @@ fun main() = application {
             iconoVentana?.let { window.iconImage = it }
         }
         XuperTheme {
-            AppRoot()
+            AppRoot(window = window, windowState = windowState)
         }
     }
 }

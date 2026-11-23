@@ -1,6 +1,25 @@
 package com.xuperclean.desktop.ui.player
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.material.icons.filled.Fullscreen
+import androidx.compose.material.icons.filled.FullscreenExit
+import androidx.compose.material.icons.automirrored.filled.VolumeOff
+import androidx.compose.material.icons.filled.Replay10
+import androidx.compose.material.icons.filled.Forward10
+import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.onPointerEvent
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.window.WindowPlacement
+import androidx.compose.ui.window.WindowState
+import kotlinx.coroutines.delay
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -44,21 +63,19 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.key.Key
-import androidx.compose.ui.input.key.KeyEventType
-import androidx.compose.ui.input.key.key
-import androidx.compose.ui.input.key.onPreviewKeyEvent
-import androidx.compose.ui.input.key.type
 import androidx.compose.ui.unit.dp
 import com.xuperclean.core.SubtitleTrack
 import com.xuperclean.core.model.VodAsset
 import com.xuperclean.desktop.data.VodStream
 import com.xuperclean.desktop.data.XuperRepository
 import com.xuperclean.desktop.player.AjusteImagen
+import com.xuperclean.desktop.player.DesktopFullscreen
 import com.xuperclean.desktop.player.MpvPlayer
 import com.xuperclean.desktop.player.MpvSurface
 import com.xuperclean.desktop.ui.theme.XuperTheme
 import kotlin.math.roundToInt
+
+import java.io.File
 
 /** Qué reproducir (mismo contrato que móvil). */
 sealed interface PlayerPayload {    val title: String
@@ -87,8 +104,14 @@ sealed interface PlayerPayload {    val title: String
  *
  * Teclado: espacio = pausa · ←/→ = ±10 s (VOD) · Esc = volver.
  */
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
-fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
+fun PlayerScreen(
+    payload: PlayerPayload,
+    window: java.awt.Window,
+    windowState: WindowState,
+    onClose: () -> Unit,
+) {
     var resolviendo by remember(payload) { mutableStateOf(true) }
     var errorMsg by remember(payload) { mutableStateOf<String?>(null) }
     var streamUrl by remember(payload) { mutableStateOf<String?>(null) }
@@ -152,6 +175,36 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
     var arrastrando by remember(payload) { mutableStateOf(false) }
     var volumen by remember { mutableStateOf(100) }
     var ajusteImagen by remember { mutableStateOf(AjusteImagen.AJUSTAR) }
+    var controlsVisible by remember { mutableStateOf(true) }
+    var lastActivity by remember { mutableStateOf(System.nanoTime()) }
+    var hoverTop by remember { mutableStateOf(false) }
+    var hoverBottom by remember { mutableStateOf(false) }
+    var keyboardNavigation by remember { mutableStateOf(false) }
+    var previousVolume by remember { mutableStateOf(100) }
+    var videoCanvas by remember { mutableStateOf<java.awt.Canvas?>(null) }
+    var fullscreen by remember { mutableStateOf(false) }
+    var placementAntes by remember { mutableStateOf(windowState.placement) }
+
+    fun showControls() {
+        lastActivity = System.nanoTime()
+        controlsVisible = true
+    }
+    fun toggleFullscreen() {
+        if (!fullscreen) {
+            placementAntes = windowState.placement
+            if (DesktopFullscreen.enter(window, videoCanvas)) {
+                fullscreen = true
+                // Compose es quien fija el tamaño final; el estilo nativo ya quitó
+                // la decoración, así que Fullscreen no vuelve a mostrar la barra.
+                windowState.placement = WindowPlacement.Fullscreen
+            }
+        } else {
+            DesktopFullscreen.exit(window)
+            windowState.placement = placementAntes
+            fullscreen = false
+        }
+        showControls()
+    }
 
     LaunchedEffect(payload) {
         try {
@@ -238,6 +291,11 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
     var mpv by remember { mutableStateOf<MpvPlayer?>(null) }
     var hwnd by remember { mutableStateOf(0L) }
     var terminado by remember(payload) { mutableStateOf(false) }
+
+    fun changeVolume(value: Int) {
+        volumen = value.coerceIn(0, 100)
+        mpv?.setVolume(volumen)
+    }
 
     /** Cambia el encuadre sin reiniciar la reproducción. */
     fun cambiarImagen(modo: AjusteImagen) {
@@ -367,6 +425,84 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
         mpv = player
     }
 
+    // AWT también recibe teclas con foco en SwingPanel; un único dispatcher evita
+    // que Espacio active simultáneamente el botón enfocado y la reproducción.
+    val onKey = rememberUpdatedState<(java.awt.event.KeyEvent) -> Boolean> { e ->
+        val code = e.keyCode
+        val handled = code in setOf(
+            java.awt.event.KeyEvent.VK_SPACE, java.awt.event.KeyEvent.VK_F11,
+            java.awt.event.KeyEvent.VK_ESCAPE, java.awt.event.KeyEvent.VK_LEFT,
+            java.awt.event.KeyEvent.VK_RIGHT, java.awt.event.KeyEvent.VK_UP,
+            java.awt.event.KeyEvent.VK_DOWN, java.awt.event.KeyEvent.VK_M,
+        )
+        if (verAjustes || !window.isActive || e.isAltDown || e.isControlDown || e.isMetaDown) false
+        else if (code == java.awt.event.KeyEvent.VK_TAB) {
+            keyboardNavigation = true
+            showControls()
+            false
+        } else if (!handled) false
+        else {
+            if (e.id == java.awt.event.KeyEvent.KEY_RELEASED) {
+                showControls()
+                when (code) {
+                    java.awt.event.KeyEvent.VK_SPACE -> mpv?.togglePause()
+                    java.awt.event.KeyEvent.VK_F11 -> toggleFullscreen()
+                    java.awt.event.KeyEvent.VK_ESCAPE ->
+                        if (fullscreen) toggleFullscreen() else onClose()
+                    java.awt.event.KeyEvent.VK_LEFT -> if (!isLive) mpv?.seekBy(-10)
+                    java.awt.event.KeyEvent.VK_RIGHT -> if (!isLive) mpv?.seekBy(10)
+                    java.awt.event.KeyEvent.VK_UP -> changeVolume(volumen + 5)
+                    java.awt.event.KeyEvent.VK_DOWN -> changeVolume(volumen - 5)
+                    java.awt.event.KeyEvent.VK_M -> {
+                        if (volumen > 0) { previousVolume = volumen; changeVolume(0) }
+                        else changeVolume(previousVolume.coerceAtLeast(5))
+                    }
+                }
+            }
+            true
+        }
+    }
+    DisposableEffect(window) {
+        val manager = java.awt.KeyboardFocusManager.getCurrentKeyboardFocusManager()
+        val dispatcher = java.awt.KeyEventDispatcher { onKey.value(it) }
+        manager.addKeyEventDispatcher(dispatcher)
+        onDispose {
+            manager.removeKeyEventDispatcher(dispatcher)
+            DesktopFullscreen.release(window)
+            if (fullscreen) windowState.placement = placementAntes
+            window.cursor = java.awt.Cursor.getDefaultCursor()
+            videoCanvas?.cursor = java.awt.Cursor.getDefaultCursor()
+        }
+    }
+    // mpv es una ventana nativa hija: sus movimientos de ratón no siempre llegan
+    // a Compose/AWT. Consultar el puntero cubre también esa superficie sin hooks OS.
+    LaunchedEffect(window) {
+        var previousPoint: java.awt.Point? = null
+        while (true) {
+            val point = java.awt.MouseInfo.getPointerInfo()?.location
+            if (point != null && point != previousPoint && window.isActive && window.bounds.contains(point)) {
+                keyboardNavigation = false
+                showControls()
+            }
+            previousPoint = point
+            val ahora = System.nanoTime()
+            // Si el usuario navega con TAB y deja de pulsar teclas, la barra vuelve
+            // a ocultarse: el autoocultado no debe quedar anulado por el foco.
+            if (keyboardNavigation && ahora - lastActivity > 5_000_000_000L) {
+                keyboardNavigation = false
+            }
+            val ocultar = !pausado && !resolviendo && errorMsg == null && !verAjustes &&
+                !arrastrando && !hoverTop && !hoverBottom && !keyboardNavigation &&
+                ahora - lastActivity > 3_000_000_000L
+            if (ocultar) controlsVisible = false
+            if (pausado || resolviendo || errorMsg != null || verAjustes) controlsVisible = true
+            val cursor = if (!controlsVisible && window.isActive) hiddenPlayerCursor else java.awt.Cursor.getDefaultCursor()
+            window.cursor = cursor
+            videoCanvas?.cursor = cursor
+            delay(100)
+        }
+    }
+
     // El teclado solo llega a onPreviewKeyEvent si el foco está dentro de este subárbol:
     // el reproductor se queda con el foco al abrirse.
     val foco = remember { FocusRequester() }
@@ -377,23 +513,20 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
             .fillMaxSize()
             .background(Color.Black)
             .focusRequester(foco)
-            .onPreviewKeyEvent { e ->
-                if (e.type != KeyEventType.KeyUp) return@onPreviewKeyEvent false
-                when (e.key) {
-                    Key.Spacebar, Key.Enter -> { mpv?.togglePause(); true }
-                    Key.DirectionLeft -> { if (!isLive) mpv?.seekBy(-10); true }
-                    Key.DirectionRight -> { if (!isLive) mpv?.seekBy(10); true }
-                    Key.Escape -> { onClose(); true }
-                    else -> false
-                }
-            }
             .focusable(),
     ) {
-        // --- barra superior
+        // Las barras liberan su espacio al ocultarse: no se superponen al HWND.
+        AnimatedVisibility(
+            visible = controlsVisible,
+            enter = fadeIn(tween(180)) + expandVertically(tween(220), expandFrom = Alignment.Top),
+            exit = fadeOut(tween(160)) + shrinkVertically(tween(220), shrinkTowards = Alignment.Top),
+        ) {
         Row(
             Modifier
                 .fillMaxWidth()
                 .background(MaterialTheme.colorScheme.surfaceContainerLowest)
+                .onPointerEvent(PointerEventType.Enter) { hoverTop = true; showControls() }
+                .onPointerEvent(PointerEventType.Exit) { hoverTop = false; lastActivity = System.nanoTime() }
                 .padding(horizontal = 8.dp, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -409,15 +542,15 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
                 style = MaterialTheme.typography.titleMedium,
                 color = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier.weight(1f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
-            if (audios.size > 1 || subtitulos.isNotEmpty()) {
-                IconButton(onClick = { verAjustes = true }) {
-                    Icon(
-                        Icons.Filled.Settings,
-                        contentDescription = "Ajustes de reproducción",
-                        tint = MaterialTheme.colorScheme.onSurface,
-                    )
-                }
+            IconButton(onClick = { showControls(); verAjustes = true }) {
+                Icon(
+                    Icons.Filled.Settings,
+                    contentDescription = "Ajustes de reproducción",
+                    tint = MaterialTheme.colorScheme.onSurface,
+                )
             }
             if (isLive) {
                 Text(
@@ -427,6 +560,8 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
                     modifier = Modifier.padding(end = 12.dp),
                 )
             }
+        }
+
         }
 
         // --- vídeo (componente pesado: sin Compose encima)
@@ -489,6 +624,15 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
                             TextButton(onClick = { mpvIntentos.intValue++ }) {
                                 Text("Ya está instalado, reintentar")
                             }
+                            TextButton(onClick = {
+                                runCatching {
+                                    val base = System.getenv("LOCALAPPDATA")
+                                        ?: System.getProperty("user.home")
+                                    val carpeta = File(base, "Xuper/mpv")
+                                    carpeta.mkdirs()
+                                    java.awt.Desktop.getDesktop().open(carpeta)
+                                }
+                            }) { Text("Abrir carpeta") }
                         }
                     }
                 } else {
@@ -505,25 +649,57 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
             } else {
                 MpvSurface(
                     modifier = Modifier.fillMaxSize(),
-                    onCanvas = { canvas -> hwnd = MpvPlayer.hwndOf(canvas) },
+                    onCanvas = { canvas ->
+                        videoCanvas = canvas
+                        canvas.isFocusable = false
+                        hwnd = MpvPlayer.hwndOf(canvas)
+                    },
                 )
             }
         }
 
         // --- barra inferior de control
+        AnimatedVisibility(
+            visible = controlsVisible,
+            enter = fadeIn(tween(180)) + expandVertically(tween(220), expandFrom = Alignment.Bottom),
+            exit = fadeOut(tween(160)) + shrinkVertically(tween(220), shrinkTowards = Alignment.Bottom),
+        ) {
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val compact = maxWidth < 900.dp
+        Column(Modifier.background(MaterialTheme.colorScheme.surfaceContainerLowest)) {
         Row(
             Modifier
                 .fillMaxWidth()
                 .background(MaterialTheme.colorScheme.surfaceContainerLowest)
-                .padding(horizontal = 16.dp, vertical = 10.dp),
+                .onPointerEvent(PointerEventType.Enter) { hoverBottom = true; showControls() }
+                .onPointerEvent(PointerEventType.Exit) { hoverBottom = false; lastActivity = System.nanoTime() }
+                .padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
+            if (!isLive && !compact) {
+                IconButton(onClick = { mpv?.seekBy(-10) }) {
+                    Icon(
+                        Icons.Filled.Replay10,
+                        contentDescription = "Retroceder 10 s (←)",
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                }
+            }
             FilledIconButton(onClick = { mpv?.togglePause() }) {
                 Icon(
                     if (pausado) Icons.Filled.PlayArrow else Icons.Filled.Pause,
-                    contentDescription = if (pausado) "Reproducir" else "Pausar",
+                    contentDescription = if (pausado) "Reproducir (Espacio)" else "Pausar (Espacio)",
                 )
+            }
+            if (!isLive && !compact) {
+                IconButton(onClick = { mpv?.seekBy(10) }) {
+                    Icon(
+                        Icons.Filled.Forward10,
+                        contentDescription = "Avanzar 10 s (→)",
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                }
             }
 
             if (!isLive && duracion > 0) {
@@ -557,7 +733,8 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
                 )
             }
 
-            // Encuadre del vídeo: cicla Ajustar → Pantalla completa → Estirar → 16:9 → 4:3.
+            if (!compact) {
+            // El encuadre es independiente de la pantalla completa de la ventana.
             TextButton(onClick = { cambiarImagen(ajusteImagen.siguiente()) }) {
                 Icon(
                     Icons.Filled.AspectRatio,
@@ -568,20 +745,41 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
                 Text(ajusteImagen.etiqueta, style = MaterialTheme.typography.labelMedium)
             }
 
-            Icon(
-                Icons.AutoMirrored.Filled.VolumeUp,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Slider(
+            }
+            IconButton(onClick = {
+                if (volumen > 0) { previousVolume = volumen; changeVolume(0) }
+                else changeVolume(previousVolume.coerceAtLeast(5))
+            }) {
+                Icon(
+                    if (volumen == 0) Icons.AutoMirrored.Filled.VolumeOff else Icons.AutoMirrored.Filled.VolumeUp,
+                    contentDescription = if (volumen == 0) "Activar sonido (M)" else "Silenciar (M)",
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+            }
+            if (!compact) Slider(
                 value = volumen.toFloat(),
                 onValueChange = {
-                    volumen = it.roundToInt()
-                    mpv?.setVolume(volumen)
+                    changeVolume(it.roundToInt())
                 },
                 valueRange = 0f..100f,
-                modifier = Modifier.width(110.dp),
+                modifier = Modifier.width(90.dp),
             )
+            IconButton(onClick = { toggleFullscreen() }) {
+                Icon(
+                    if (fullscreen) Icons.Filled.FullscreenExit else Icons.Filled.Fullscreen,
+                    contentDescription = if (fullscreen) "Salir de pantalla completa (F11)" else "Pantalla completa (F11)",
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+            }
+        }
+        if (!compact) Text(
+            "Espacio: pausa   ·   ← →: 10 s   ·   ↑ ↓: volumen   ·   M: silencio   ·   F11: pantalla completa",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(start = 18.dp, bottom = 8.dp),
+        )
+        }
+        }
         }
     }
 
@@ -610,6 +808,14 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
             onDismiss = { verAjustes = false },
         )
     }
+}
+
+private val hiddenPlayerCursor: java.awt.Cursor by lazy {
+    java.awt.Toolkit.getDefaultToolkit().createCustomCursor(
+        java.awt.image.BufferedImage(1, 1, java.awt.image.BufferedImage.TYPE_INT_ARGB),
+        java.awt.Point(0, 0),
+        "player-hidden",
+    )
 }
 
 private fun formatearTiempo(segundos: Double): String {

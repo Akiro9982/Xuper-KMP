@@ -11,7 +11,7 @@ import androidx.tv.material3.ClickableSurfaceDefaults
  *
  * tv-material enfoca invirtiendo a un contenedor claro; en un tema oscuro eso produce
  * destellos blancos y, si el texto tiene color fijo, lo vuelve ilegible. Aquí el foco
- * usa el rojo de marca (primaryContainer) con texto claro (onPrimaryContainer), así el
+ * usa el violeta de marca (primaryContainer) con texto claro (onPrimaryContainer), así el
  * contraste está garantizado en cualquier tarjeta que use [tvCardColors].
  */
 @Composable

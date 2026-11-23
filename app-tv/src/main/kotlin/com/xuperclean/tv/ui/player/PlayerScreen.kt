@@ -5,6 +5,9 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Canvas
@@ -407,7 +410,7 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
     LaunchedEffect(player) {
         while (true) {
             delay(500)
-            positionMs = player.currentPosition
+            positionMs = player.currentPosition.coerceAtLeast(0L)
             posicionActual = positionMs
             durationMs = player.duration.coerceAtLeast(0L)
             duracionActual = durationMs
@@ -421,12 +424,16 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
         }
     }
 
-    // Autoocultado solo si el usuario está sobre la barra y reproduciendo: mientras
-    // navega por los botones el overlay se queda para no perder la referencia.
-    LaunchedEffect(overlayVisible, overlayTick, zonaOverlay) {
+    // Autoocultado durante la reproducción (también en directo). Al pausar, abrir
+    // ajustes o navegar por los botones, el overlay permanece visible.
+    LaunchedEffect(overlayVisible, overlayTick, zonaOverlay, isPlaying, verAjustes, errorMsg, isLive) {
+        if (!isPlaying || verAjustes || errorMsg != null) {
+            overlayVisible = true
+            return@LaunchedEffect
+        }
         if (!overlayVisible) return@LaunchedEffect
         delay(6000)
-        if (zonaOverlay == ZonaOverlay.PROGRESO && isPlaying) overlayVisible = false
+        if (zonaOverlay == ZonaOverlay.PROGRESO || isLive) overlayVisible = false
     }
 
     // En directo no hay barra que enfocar: el mando empieza en «Ajustes».
@@ -445,7 +452,11 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
     LaunchedEffect(verAjustes) { if (!verAjustes) playerFocus.requestFocus() }
 
     BackHandler {
-        if (verAjustes) verAjustes = false else onClose()
+        when {
+            verAjustes -> verAjustes = false
+            overlayVisible && isPlaying -> overlayVisible = false
+            else -> onClose()
+        }
     }
 
     Box(
@@ -592,14 +603,14 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
 
         AnimatedVisibility(
             visible = overlayVisible,
-            enter = fadeIn(),
-            exit = fadeOut(),
+            enter = fadeIn() + slideInVertically { it / 4 },
+            exit = fadeOut() + slideOutVertically { it / 4 },
             modifier = Modifier.align(Alignment.BottomStart),
         ) {
             Column(
                 Modifier
                     .fillMaxWidth()
-                    .background(Color.Black.copy(alpha = 0.62f))
+                    .background(Brush.verticalGradient(listOf(Color(0xE6100B19), Color(0xFF100B19))))
                     .padding(horizontal = 32.dp, vertical = 18.dp),
             ) {
                 // Fila superior: título y acciones compactas alineadas a la derecha.
@@ -674,7 +685,7 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
                         )
                         Text(
                             if (zonaOverlay == ZonaOverlay.PROGRESO) {
-                                "◀ ▶ buscar · ↑ ajustes"
+                                if (isPlaying) "OK pausar · ◀ ▶ buscar · ↑ ajustes" else "OK reproducir · ◀ ▶ buscar"
                             } else {
                                 "OK elegir · ↓ barra"
                             },
@@ -734,7 +745,13 @@ private fun TvSettingsOverlay(
     onAjusteImagen: (AjusteImagen) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    val primerFoco = androidx.compose.ui.focus.FocusRequester()
+    val primerFoco = remember { androidx.compose.ui.focus.FocusRequester() }
+    val settingsColors = androidx.tv.material3.ClickableSurfaceDefaults.colors(
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        focusedContainerColor = MaterialTheme.colorScheme.secondaryContainer,
+        focusedContentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+    )
     androidx.compose.runtime.LaunchedEffect(Unit) {
         runCatching { primerFoco.requestFocus() }
     }
@@ -774,6 +791,7 @@ private fun TvSettingsOverlay(
                     val enfocar = if (i == 0) Modifier.focusRequester(primerFoco) else Modifier
                     TvSurface(
                         onClick = { onAudio(pista.code) },
+                        colors = settingsColors,
                         modifier = enfocar.fillMaxWidth(),
                     ) {
                         Text(
@@ -792,6 +810,7 @@ private fun TvSettingsOverlay(
                 val enfocar = if (i == 0 && audios.size <= 1) Modifier.focusRequester(primerFoco) else Modifier
                 TvSurface(
                     onClick = { onAjusteImagen(modo) },
+                    colors = settingsColors,
                     modifier = enfocar.fillMaxWidth(),
                 ) {
                     Text(
@@ -804,7 +823,7 @@ private fun TvSettingsOverlay(
             }
             if (subtitulos.isNotEmpty()) {
                 Text("Subtítulos", style = MaterialTheme.typography.titleSmall, color = Color.White)
-                TvSurface(onClick = { onSubtitulo(null) }, modifier = Modifier.fillMaxWidth()) {
+                TvSurface(onClick = { onSubtitulo(null) }, colors = settingsColors, modifier = Modifier.fillMaxWidth()) {
                     Text(
                         text = if (pistaSub == null) "● Desactivados" else "Desactivados",
                         style = MaterialTheme.typography.bodyMedium,
@@ -815,6 +834,7 @@ private fun TvSettingsOverlay(
                 subtitulos.forEach { t ->
                     TvSurface(
                         onClick = { onSubtitulo(t.language) },
+                        colors = settingsColors,
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         Text(
@@ -890,7 +910,7 @@ private fun PlayerView.aplicarImagen(modo: AjusteImagen) {
     )
 }
 
-/** Botón compacto del overlay con resaltado de foco explícito (rojo de marca). */
+/** Botón compacto con foco violeta de alto contraste, visible a distancia. */
 @Composable
 private fun BotonOverlay(
     enfocado: Boolean,

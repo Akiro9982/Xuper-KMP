@@ -16,25 +16,25 @@ import androidx.compose.ui.unit.sp
  * Tema Material 3 (dark) para TV.
  *
  * Tokens semánticos: las pantallas usan MaterialTheme.colorScheme.*, nunca hex sueltos.
- * Identidad: rojo Xuper como primary (escaso: solo acciones/foco), superficies neutras
+ * Identidad: violeta Xuper como primary (escaso: solo acciones/foco), superficies neutras
  * oscuras para contraste y bajo consumo en paneles.
  */
 
-// ---- tokens base (generados a mano, esquema dark M3 con primario rojo Xuper) ----
-private val Primary = Color(0xFFFFB4AB)
-private val OnPrimary = Color(0xFF690005)
-private val PrimaryContainer = Color(0xFF93000A)
-private val OnPrimaryContainer = Color(0xFFFFDAD6)
+// ---- tokens base: violeta de alto contraste compartido con móvil y desktop ----
+private val Primary = Color(0xFFCDB4FF)
+private val OnPrimary = Color(0xFF261047)
+private val PrimaryContainer = Color(0xFF6335A2)
+private val OnPrimaryContainer = Color(0xFFF6EDFF)
 
-private val Secondary = Color(0xFFE7BDB6)
-private val OnSecondary = Color(0xFF442925)
-private val SecondaryContainer = Color(0xFF5D3F3B)
-private val OnSecondaryContainer = Color(0xFFFFDAD4)
+private val Secondary = Color(0xFFD0C2E0)
+private val OnSecondary = Color(0xFF30243F)
+private val SecondaryContainer = Color(0xFF49365F)
+private val OnSecondaryContainer = Color(0xFFF0E3FF)
 
-private val Tertiary = Color(0xFFD8C4A0)
-private val OnTertiary = Color(0xFF3C2F16)
-private val TertiaryContainer = Color(0xFF55452B)
-private val OnTertiaryContainer = Color(0xFFF5DFBB)
+private val Tertiary = Color(0xFFBFC2FF)
+private val OnTertiary = Color(0xFF242653)
+private val TertiaryContainer = Color(0xFF414478)
+private val OnTertiaryContainer = Color(0xFFE4E1FF)
 
 private val Surface = Color(0xFF0E0E12)
 private val SurfaceDim = Color(0xFF090910)
@@ -43,8 +43,8 @@ private val SurfaceContainerLow = Color(0xFF16161B)
 private val SurfaceContainer = Color(0xFF1A1A20)
 private val SurfaceContainerHigh = Color(0xFF24242B)
 private val SurfaceContainerHighest = Color(0xFF2F2F36)
-private val OnSurface = Color(0xFFE5E1E6)
-private val OnSurfaceVariant = Color(0xFFA9A3AC)
+private val OnSurface = Color(0xFFF6F1FA)
+private val OnSurfaceVariant = Color(0xFFCCC3D6)
 private val Outline = Color(0xFF73737E)
 private val OutlineVariant = Color(0xFF2F2F36)
 
