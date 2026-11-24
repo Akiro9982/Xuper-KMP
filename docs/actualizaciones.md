@@ -379,7 +379,9 @@ Si GitHub ofrece **release immutability** en la configuración del repositorio,
 actívala: impide editar o borrar una release publicada incluso fuera del workflow.
 
 Estas reglas no se pueden aplicar desde el repositorio: son ajustes de GitHub y
-hay que configurarlas una vez. La guía para agentes está en `AGENTS.md`.
+hay que configurarlas una vez. Para que sirvan, un agente debe usar una cuenta con
+permiso **Write**, nunca **Admin**; un administrador puede cambiar las reglas.
+La guía para agentes está en `AGENTS.md`.
 
 ---
 

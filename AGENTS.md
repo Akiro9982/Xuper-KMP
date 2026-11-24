@@ -143,7 +143,8 @@ recrear una etiqueta.
 
 Estas reglas no viven en el repositorio; se configuran en GitHub y son las que
 impiden que un agente con permisos de escritura mueva una etiqueta o reescriba
-`main`.
+`main`. El agente debe usar una cuenta con permiso **Write**, nunca **Admin**: un
+administrador puede cambiar las reglas y saltarse estas barreras.
 
 ### Etiquetas
 
