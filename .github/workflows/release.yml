@@ -31,6 +31,7 @@ jobs:
       channels: ${{ steps.meta.outputs.channels }}
       base: ${{ steps.meta.outputs.base }}
       head: ${{ steps.meta.outputs.head }}
+      head_sha: ${{ steps.meta.outputs.head_sha }}
     steps:
       - name: Checkout completo
         uses: actions/checkout@v4
@@ -77,6 +78,7 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "base=$BASE" >> "$GITHUB_OUTPUT"
           echo "head=$HEAD" >> "$GITHUB_OUTPUT"
+          echo "head_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
           echo "channels=$CHANNELS" >> "$GITHUB_OUTPUT"
 
           {
@@ -103,6 +105,7 @@ jobs:
         channel: [mobile, tv]
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
+      CHANNEL: ${{ matrix.channel }}
       SELECTED: ${{ contains(needs.prepare.outputs.channels, format('"{0}"', matrix.channel)) }}
     steps:
       - name: Checkout
@@ -162,18 +165,18 @@ jobs:
         run: |
           set -euo pipefail
           chmod +x gradlew
-          ./gradlew ":app-${matrix.channel}:assembleRelease" \
+          ./gradlew ":app-${CHANNEL}:assembleRelease" \
             -PappVersionName="$VERSION" \
             --no-daemon --console=plain
 
-          APK=$(find "app-${matrix.channel}/build/outputs/apk/release" -maxdepth 1 -type f -name '*.apk' | head -n 1)
+          APK=$(find "app-${CHANNEL}/build/outputs/apk/release" -maxdepth 1 -type f -name '*.apk' | head -n 1)
           if [ -z "$APK" ]; then
-            echo "::error::No se encontró el APK de ${matrix.channel}."
+            echo "::error::No se encontró el APK de ${CHANNEL}."
             exit 1
           fi
 
           mkdir -p dist
-          OUT="xuper-${matrix.channel}-${VERSION}.apk"
+          OUT="xuper-${CHANNEL}-${VERSION}.apk"
           cp "$APK" "dist/$OUT"
           SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
           APKSIGNER="$SDK/build-tools/36.0.0/apksigner"
@@ -266,6 +269,7 @@ jobs:
           GH_REPO: ${{ github.repository }}
           VERSION: ${{ needs.prepare.outputs.version }}
           CHANNELS: ${{ needs.prepare.outputs.channels }}
+          HEAD_SHA: ${{ needs.prepare.outputs.head_sha }}
         run: |
           set -euo pipefail
           echo "Publicando $VERSION para $CHANNELS"
@@ -285,7 +289,7 @@ jobs:
               gh release edit "$TAG" --title "$TITLE" --notes-file "$NOTES" --draft=false --latest=false
             else
               gh release create "$TAG" --title "$TITLE" --notes-file "$NOTES" \
-                --target "$GITHUB_SHA" --latest=false
+                --target "$HEAD_SHA" --latest=false
             fi
 
             shopt -s nullglob
