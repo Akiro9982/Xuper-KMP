@@ -35,7 +35,7 @@ fun main() = application {
             iconoVentana?.let { window.iconImage = it }
         }
         XuperTheme {
-            AppRoot(window = window, windowState = windowState)
+            AppRoot(window = window, windowState = windowState, onExit = ::exitApplication)
         }
     }
 }

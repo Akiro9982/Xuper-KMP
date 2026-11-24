@@ -60,6 +60,13 @@ signing.properties
 *.iws
 out/
 
+# Artefactos y metadatos de los scripts de release
+release-notes/
+.release-notes-test.md
+release-meta.json
+dist/
+__pycache__/
+
 # Registros y temporales
 *.log
 *.tmp

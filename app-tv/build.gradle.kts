@@ -7,6 +7,25 @@ plugins {
     id("org.jetbrains.kotlin.plugin.serialization")
 }
 
+val versionProps = Properties().apply {
+    val archivo = rootProject.file("version.properties")
+    if (archivo.exists()) archivo.inputStream().use { load(it) }
+}
+
+/** Versión inyectable por el workflow: -PappVersionName=0.2.0. */
+val appVersionName = (project.findProperty("appVersionName") as String?)
+    ?: versionProps.getProperty("app.versionName")
+    ?: "0.0.0"
+
+/** Misma fórmula que com.xuperclean.core.update.AppVersion.versionCode. */
+val appVersionCode = (project.findProperty("appVersionCode") as String?)?.toInt()
+    ?: run {
+        val m = Regex("""^(\d+)\.(\d+)\.(\d+)$""").matchEntire(appVersionName)
+        requireNotNull(m) { "version.properties: app.versionName inválido: $appVersionName" }
+        m.groupValues[1].toInt() * 1_000_000 + m.groupValues[2].toInt() * 1_000 + m.groupValues[3].toInt()
+    }
+
+
 android {
     namespace = "com.xuperclean.tv"
     compileSdk = 37
@@ -39,8 +58,8 @@ android {
         applicationId = "com.xuperclean.tv"
         minSdk = 23
         targetSdk = 36
-        versionCode = 5
-        versionName = "0.1.4"
+        versionCode = appVersionCode
+        versionName = appVersionName
     }
 
     buildTypes {
@@ -63,6 +82,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 

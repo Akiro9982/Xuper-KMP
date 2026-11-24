@@ -7,13 +7,18 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SmartDisplay
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -22,16 +27,23 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import com.xuperclean.core.model.VodAsset
+import com.xuperclean.core.update.UpdateState
+import com.xuperclean.mobile.update.AppUpdates
 import com.xuperclean.mobile.ui.detail.DetailScreen
 import com.xuperclean.mobile.ui.player.PlayerPayload
 import com.xuperclean.mobile.ui.player.PlayerScreen
+import com.xuperclean.mobile.ui.settings.SettingsScreen
 
 /** Destinos de primer nivel (barra inferior). */
 sealed class Tab(val label: String) {
@@ -40,6 +52,7 @@ sealed class Tab(val label: String) {
     data object Pelicula : Tab("Película")
     data object Series : Tab("Series")
     data object Explorar : Tab("Buscar")
+    data object Ajustes : Tab("Ajustes")
 }
 
 sealed interface Overlay {
@@ -47,7 +60,7 @@ sealed interface Overlay {
     data class Player(val payload: PlayerPayload) : Overlay
 }
 
-private val TABS = listOf(Tab.Inicio, Tab.Live, Tab.Pelicula, Tab.Series, Tab.Explorar)
+private val TABS = listOf(Tab.Inicio, Tab.Live, Tab.Pelicula, Tab.Series, Tab.Explorar, Tab.Ajustes)
 
 private fun iconOf(tab: Tab) = when (tab) {
     Tab.Inicio -> Icons.Filled.Home
@@ -55,12 +68,16 @@ private fun iconOf(tab: Tab) = when (tab) {
     Tab.Pelicula -> Icons.Filled.Movie
     Tab.Series -> Icons.Filled.SmartDisplay
     Tab.Explorar -> Icons.Filled.Search
+    Tab.Ajustes -> Icons.Filled.Settings
 }
 
 @Composable
 fun AppRoot() {
     var tab by remember { mutableStateOf<Tab>(Tab.Inicio) }
     val stack = remember { mutableStateListOf<Overlay>() }
+    val updateState by AppUpdates.current.state.collectAsState()
+
+    LaunchedEffect(Unit) { AppUpdates.current.checkIfIdle() }
 
     fun pop() {
         if (stack.isNotEmpty()) stack.removeAt(stack.lastIndex)
@@ -90,7 +107,19 @@ fun AppRoot() {
                             tab = t
                             stack.clear() // una pestaña siempre lleva al nivel superior
                         },
-                        icon = { Icon(iconOf(t), contentDescription = t.label) },
+                        icon = {
+                            Box {
+                                Icon(iconOf(t), contentDescription = t.label)
+                                if (t == Tab.Ajustes && updateState is UpdateState.Available) {
+                                    Box(
+                                        Modifier
+                                            .align(Alignment.TopEnd)
+                                            .size(8.dp)
+                                            .background(MaterialTheme.colorScheme.error, CircleShape),
+                                    )
+                                }
+                            }
+                        },
                         label = { Text(t.label) },
                     )
                 }
@@ -124,6 +153,7 @@ fun AppRoot() {
                 Tab.Pelicula -> CatalogScreen(CatalogKind.Pelicula, onOpenAsset = { a -> stack.add(Overlay.Detail(a)) })
                 Tab.Series -> CatalogScreen(CatalogKind.Series, onOpenAsset = { a -> stack.add(Overlay.Detail(a)) })
                 Tab.Explorar -> SearchScreen(onOpenAsset = { a -> stack.add(Overlay.Detail(a)) })
+                Tab.Ajustes -> SettingsScreen()
             }
         }
     }

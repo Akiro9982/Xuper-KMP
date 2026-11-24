@@ -7,6 +7,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,6 +18,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -32,6 +34,7 @@ import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SmartDisplay
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -39,6 +42,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
@@ -60,6 +64,7 @@ import androidx.compose.material3.CardDefaults
 import com.xuperclean.core.WatchProgress
 import com.xuperclean.core.model.Channel
 import com.xuperclean.core.model.VodAsset
+import com.xuperclean.core.update.UpdateState
 import com.xuperclean.desktop.data.DesktopWatchStore
 import com.xuperclean.desktop.data.XuperRepository
 import com.xuperclean.desktop.ui.detail.DetailScreen
@@ -70,6 +75,8 @@ import com.xuperclean.desktop.ui.common.UiState
 import com.xuperclean.desktop.ui.common.rememberAsync
 import com.xuperclean.desktop.ui.player.PlayerPayload
 import com.xuperclean.desktop.ui.player.PlayerScreen
+import com.xuperclean.desktop.ui.settings.SettingsScreen
+import com.xuperclean.desktop.update.AppUpdates
 import coil3.compose.AsyncImage
 
 /** Destinos del menú lateral (IA de la app original). */
@@ -81,6 +88,7 @@ sealed class Tab(val label: String) {
     data object Kids : Tab("Kids")
     data object Anime : Tab("Anime")
     data object Explorar : Tab("Explorar")
+    data object Ajustes : Tab("Ajustes")
 }
 
 sealed interface Overlay {
@@ -90,6 +98,7 @@ sealed interface Overlay {
 
 private val TABS = listOf(
     Tab.Live, Tab.Destacados, Tab.Pelicula, Tab.Series, Tab.Kids, Tab.Anime, Tab.Explorar,
+    Tab.Ajustes,
 )
 
 private fun iconOf(tab: Tab) = when (tab) {
@@ -100,12 +109,20 @@ private fun iconOf(tab: Tab) = when (tab) {
     Tab.Kids -> Icons.Filled.ChildFriendly
     Tab.Anime -> Icons.Filled.Animation
     Tab.Explorar -> Icons.Filled.Search
+    Tab.Ajustes -> Icons.Filled.Settings
 }
 
 @Composable
-fun AppRoot(window: java.awt.Window, windowState: androidx.compose.ui.window.WindowState) {
+fun AppRoot(
+    window: java.awt.Window,
+    windowState: androidx.compose.ui.window.WindowState,
+    onExit: () -> Unit,
+) {
     var tab by remember { mutableStateOf<Tab>(Tab.Destacados) }
     val stack = remember { mutableStateListOf<Overlay>() }
+    val updateState by AppUpdates.current.state.collectAsState()
+
+    LaunchedEffect(Unit) { AppUpdates.current.checkIfIdle() }
 
     fun pop() { if (stack.isNotEmpty()) stack.removeAt(stack.lastIndex) }
 
@@ -123,7 +140,12 @@ fun AppRoot(window: java.awt.Window, windowState: androidx.compose.ui.window.Win
                 .fillMaxSize()
                 .background(MaterialTheme.colorScheme.surface),
         ) {
-            SideNav(tab = tab, compacto = compacto, onSelect = { tab = it; stack.clear() })
+            SideNav(
+                tab = tab,
+                compacto = compacto,
+                hayActualizacion = updateState is UpdateState.Available,
+                onSelect = { tab = it; stack.clear() },
+            )
             AnimatedContent(
                 targetState = overlay ?: tab,
                 transitionSpec = {
@@ -152,6 +174,7 @@ fun AppRoot(window: java.awt.Window, windowState: androidx.compose.ui.window.Win
                     Tab.Kids -> CatalogScreen(CatalogKind.Kids, onOpenAsset = { a -> stack.add(Overlay.Detail(a)) })
                     Tab.Anime -> CatalogScreen(CatalogKind.Anime, onOpenAsset = { a -> stack.add(Overlay.Detail(a)) })
                     Tab.Explorar -> SearchScreen(onOpenAsset = { a -> stack.add(Overlay.Detail(a)) })
+                    Tab.Ajustes -> SettingsScreen(onExit = onExit)
                 }
             }
         }
@@ -159,7 +182,12 @@ fun AppRoot(window: java.awt.Window, windowState: androidx.compose.ui.window.Win
 }
 
 @Composable
-private fun SideNav(tab: Tab, compacto: Boolean, onSelect: (Tab) -> Unit) {
+private fun SideNav(
+    tab: Tab,
+    compacto: Boolean,
+    hayActualizacion: Boolean,
+    onSelect: (Tab) -> Unit,
+) {
     Column(
         modifier = Modifier
             .fillMaxHeight()
@@ -184,11 +212,21 @@ private fun SideNav(tab: Tab, compacto: Boolean, onSelect: (Tab) -> Unit) {
                     horizontalArrangement = if (compacto) Arrangement.Center else Arrangement.Start,
                     modifier = Modifier.padding(horizontal = if (compacto) 0.dp else 14.dp),
                 ) {
-                    Icon(
-                        iconOf(t),
-                        contentDescription = t.label,
-                        tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    Box {
+                        Icon(
+                            iconOf(t),
+                            contentDescription = t.label,
+                            tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        if (hayActualizacion && t == Tab.Ajustes) {
+                            Box(
+                                Modifier
+                                    .align(Alignment.TopEnd)
+                                    .size(8.dp)
+                                    .background(MaterialTheme.colorScheme.error, CircleShape),
+                            )
+                        }
+                    }
                     if (!compacto) {
                         Spacer(Modifier.width(12.dp))
                         Text(

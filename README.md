@@ -105,12 +105,12 @@ Por eso este proyecto no limpia la app: **la reemplaza**.
 
 | Aspecto | App original | APK limpia de referencia | Xuper KMP |
 |---|---|---|---|
-| Tamaño Android | 63,5 MB | 50,4 MB | **~24 MB** (debug; release con R8 pendiente de medir) |
+| Tamaño Android | 63,5 MB | 50,4 MB | **~3 MB** (release con R8) |
 | Clases | 16.402 | 13.546 | Núcleo propio, sin SDKs de terceros |
-| Permisos Android | 17 | 11 | **1: Internet** |
+| Permisos Android | 17 | 11 | **5: red, actualizaciones y receptores internos** |
 | Analítica / crash / push de terceros | UMeng, Google Analytics, Firebase, Crashlytics, Uyumao | Eliminados | **Ninguno** |
 | Publicidad | Sí | Eliminada | **Ninguna** |
-| Actualizador e instalador de APKs | Sí | Congelado | **No existe** |
+| Actualizador e instalador de APKs | Sí | Congelado | **Integrado con GitHub Releases** |
 | Barrido de LAN y MAC de vecinos | Sí | Neutralizado | **No existe** |
 | `deviceUniqueId` de Widevine | Sí | Neutralizado | **No se solicita** |
 | Persistencia fuera de la app | Sí (`system_c`) | Eliminada | **No existe** |
@@ -120,8 +120,11 @@ Por eso este proyecto no limpia la app: **la reemplaza**.
 | Plataformas | Solo Android | Solo Android | **Android TV, Android y Windows** |
 | Código | Cerrado | Cerrado | **Abierto y auditable** |
 
-Además, el cliente no se actualiza solo: se compila desde el repositorio y se instala la versión
-que tú elijas. No hay servidor que pueda empujarte una APK nueva.
+Las actualizaciones son explícitas y verificadas: la app consulta los releases oficiales del
+repositorio, elige solo el canal de su plataforma y descarga el artefacto después de comprobar el
+SHA-256 (y la firma en Android). No hay un servidor propio que pueda empujar una APK: quien controla
+el repositorio controla las releases, y todo el código es auditable. El proceso completo está en
+[`docs/actualizaciones.md`](docs/actualizaciones.md).
 
 ---
 
@@ -132,7 +135,7 @@ Estas mejoras no son marketing: salen de medir el portal y comparar con la app o
 - **Menos peso y menos trabajo al arrancar.** La app original inicializa UMeng, Firebase, xUtils,
   HttpDNS de Qiniu, Titan Ranger, configuración de anuncios, el servicio de dominios y OkGo antes
   de pintar. Xuper KMP arranca con su núcleo y el reproductor del sistema. El APK de Android pasa
-  de 63,5 MB a ~24 MB (debug), y de 17 permisos a uno.
+  de 63,5 MB a ~24 MB (debug), y de 17 permisos a cinco.
 - **Buffer profundo y relevo de CDN.** El directo del proveedor se entrecorta en el origen: la
   ventana HLS se estanca 3–6 s y salta 8–12 s, igual en los dos CDN sanos. El cliente lo compensa
   con **20–30 s de buffer** y conmuta de host solo cuando la carga falla de verdad.
@@ -235,7 +238,8 @@ HEVC, se puede usar sin cambiar el código.
 
 ## Uso
 
-1. Compila o descarga la versión de tu plataforma.
+1. Compila o descarga la versión de tu plataforma. En **Ajustes → Actualizaciones** puedes
+   comprobar si hay una nueva y ver su changelog.
 2. En Windows, descarga `mpv.exe` y colócalo como se indica arriba.
 3. Abre la app e inicia con tu cuenta de Xuper.
 4. Navega por el catálogo y reproduce.
@@ -248,8 +252,10 @@ ni listas de canales.
 ## Estado del proyecto
 
 El núcleo, las tres aplicaciones y la reproducción están terminados y validados contra el portal
-real. Queda por delante la optimización para dispositivos muy limitados, la firma de las versiones
-de publicación y el empaquetado de Windows sin depender de una copia local de mpv.
+real. Queda por delante la optimización para dispositivos muy limitados y configurar los secretos
+de firma de Android en GitHub para que el workflow de release publique APK actualizables. El
+empaquetado de Windows ya genera un MSI por usuario; falta pulir la dependencia de mpv en equipos
+sin una copia local.
 
 ---
 
@@ -259,7 +265,8 @@ de publicación y el empaquetado de Windows sin depender de una copia local de m
 - `app-tv/`: aplicación para Android TV.
 - `app-mobile/`: aplicación para Android móvil.
 - `desktop/`: aplicación para Windows; requiere `mpv.exe` aparte.
-- `docs/`: diagnóstico y evidencia de las decisiones.
+- `docs/`: diagnóstico, evidencia de las decisiones y [guía de actualizaciones](docs/actualizaciones.md).
+- `.github/workflows/`: CI y publicación automática de releases por canal.
 - `desktop/resources/windows/mpv/README.md`: cómo descargar y colocar mpv.
 
 Los detalles técnicos, las mediciones y la evidencia están en `docs/` y en el código.

@@ -11,6 +11,7 @@ import coil3.network.okhttp.OkHttpNetworkFetcherFactory
 import coil3.request.allowRgb565
 import coil3.request.crossfade
 import com.xuperclean.tv.net.NetProvider
+import com.xuperclean.tv.update.AppUpdates
 import kotlinx.coroutines.Dispatchers
 
 /**
@@ -24,6 +25,11 @@ import kotlinx.coroutines.Dispatchers
  * - Mismo OkHttpClient (DNS resiliente DoH) que el portal y el player.
  */
 class XuperTvApp : Application(), SingletonImageLoader.Factory {
+
+    override fun onCreate() {
+        super.onCreate()
+        AppUpdates.init(this)
+    }
 
     override fun newImageLoader(context: PlatformContext): ImageLoader =
         ImageLoader.Builder(context)

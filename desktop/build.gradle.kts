@@ -1,10 +1,24 @@
 import org.jetbrains.compose.desktop.application.dsl.TargetFormat
+import java.util.Properties
 
 plugins {
     id("org.jetbrains.kotlin.jvm")
     id("org.jetbrains.kotlin.plugin.compose")
     id("org.jetbrains.compose")
 }
+
+val versionProps = Properties().apply {
+    val archivo = rootProject.file("version.properties")
+    if (archivo.exists()) archivo.inputStream().use { load(it) }
+}
+
+/** Versión de la app; el workflow puede inyectarla con -PappVersionName. */
+val appVersionName = (project.findProperty("appVersionName") as String?)
+    ?: versionProps.getProperty("app.versionName")
+    ?: "0.0.0"
+/** jpackage exige una versión numérica de hasta tres componentes. */
+val jpackageVersion = appVersionName.substringBefore('-')
+
 
 kotlin {
     // JDK del host: JBR 25. Java y Kotlin alineados (Kotlin 2.4 soporta target 25 en JVM).
@@ -77,12 +91,12 @@ compose.desktop {
             ?: System.getenv("PACKAGING_JDK"))?.let { javaHome = it }
 
         // JNA accede a APIs nativas (HWND): evitar warnings y bloqueo futuro en JVM 25+
-        jvmArgs += listOf("--enable-native-access=ALL-UNNAMED")
+        jvmArgs += listOf("--enable-native-access=ALL-UNNAMED", "-Dxuper.version=$appVersionName")
 
         nativeDistributions {
             targetFormats(TargetFormat.Msi, TargetFormat.Exe)
             packageName = "Xuper"
-            packageVersion = "0.1.1"
+            packageVersion = jpackageVersion
             description = "Xuper — cliente limpio de TV y VOD"
             vendor = "XuperClean"
 
@@ -93,7 +107,8 @@ compose.desktop {
                 iconFile.set(project.file("icons/xuper.ico"))
                 menuGroup = "Xuper"
                 shortcut = true
-                dirChooser = true
+                // Sin selector: jpackage instala en %LOCALAPPDATA%\Xuper sin admin.
+                dirChooser = false
                 perUserInstall = true
             }
         }

@@ -11,12 +11,18 @@ import coil3.network.okhttp.OkHttpNetworkFetcherFactory
 import coil3.request.allowRgb565
 import coil3.request.crossfade
 import com.xuperclean.mobile.net.NetProvider
+import com.xuperclean.mobile.update.AppUpdates
 
 /**
  * Application móvil: mismo criterio de gama baja que la app TV.
  * Mismo OkHttpClient (DNS DoH) compartido entre portal, imágenes y player.
  */
 class XuperMobileApp : Application(), SingletonImageLoader.Factory {
+
+    override fun onCreate() {
+        super.onCreate()
+        AppUpdates.init(this)
+    }
 
     override fun newImageLoader(context: PlatformContext): ImageLoader =
         ImageLoader.Builder(context)

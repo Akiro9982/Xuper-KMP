@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Animation
 import androidx.compose.material.icons.filled.ChildFriendly
@@ -22,12 +23,15 @@ import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SmartDisplay
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -42,11 +46,14 @@ import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.tv.material3.ClickableSurfaceDefaults
 import androidx.tv.material3.Surface
+import com.xuperclean.core.update.UpdateState
 import com.xuperclean.core.model.VodAsset
 import com.xuperclean.tv.ui.detail.DetailScreen
 import com.xuperclean.tv.ui.player.PlayerPayload
 import com.xuperclean.tv.ui.theme.tvCardColors
 import com.xuperclean.tv.ui.player.PlayerScreen
+import com.xuperclean.tv.ui.settings.SettingsScreen
+import com.xuperclean.tv.update.AppUpdates
 
 /**
  * Destinos de primer nivel (IA heredada de la app original, probada).
@@ -60,6 +67,7 @@ sealed class Tab(val label: String) {
     data object Kids : Tab("Kids")
     data object Anime : Tab("Anime")
     data object Explorar : Tab("Explorar")
+    data object Ajustes : Tab("Ajustes")
 }
 
 /** Pantallas de pila (por encima de las pestañas). */
@@ -70,6 +78,7 @@ sealed interface Overlay {
 
 private val TABS = listOf(
     Tab.Live, Tab.Destacados, Tab.Pelicula, Tab.Series, Tab.Kids, Tab.Anime, Tab.Explorar,
+    Tab.Ajustes,
 )
 
 private fun iconOf(tab: Tab) = when (tab) {
@@ -80,6 +89,7 @@ private fun iconOf(tab: Tab) = when (tab) {
     Tab.Kids -> Icons.Filled.ChildFriendly
     Tab.Anime -> Icons.Filled.Animation
     Tab.Explorar -> Icons.Filled.Search
+    Tab.Ajustes -> Icons.Filled.Settings
 }
 
 @Composable
@@ -103,6 +113,9 @@ fun AppRoot() {
 private fun TvContent() {
     var tab by remember { mutableStateOf<Tab>(Tab.Destacados) }
     val stack = remember { mutableStateListOf<Overlay>() }
+    val updateState by AppUpdates.current.state.collectAsState()
+
+    LaunchedEffect(Unit) { AppUpdates.current.checkIfIdle() }
 
     fun pop() {
         if (stack.isNotEmpty()) stack.removeAt(stack.lastIndex)
@@ -130,7 +143,11 @@ private fun TvContent() {
     }
 
     Row(Modifier.fillMaxSize()) {
-        SideNav(tab = tab, onSelect = ::irATab)
+        SideNav(
+            tab = tab,
+            onSelect = ::irATab,
+            hayActualizacion = updateState is UpdateState.Available,
+        )
         // Sin transición entre pantallas: en paneles de 1 GB, animar la pantalla
         // saliente y la entrante a la vez duplica la composición y las descargas de
         // pósters, justo cuando el usuario percibe el cambio como «lento». El cambio
@@ -155,6 +172,7 @@ private fun TvContent() {
                 Tab.Kids -> CatalogScreen(kind = CatalogKind.Kids, onOpenAsset = { a -> stack.add(Overlay.Detail(a)) })
                 Tab.Anime -> CatalogScreen(kind = CatalogKind.Anime, onOpenAsset = { a -> stack.add(Overlay.Detail(a)) })
                 Tab.Explorar -> SearchScreen(onOpenAsset = { a -> stack.add(Overlay.Detail(a)) })
+                Tab.Ajustes -> SettingsScreen()
             }
         }
     }
@@ -165,14 +183,14 @@ private fun TvContent() {
  * Selección: contenedor + icono + texto (no solo color); foco: Surface de tv-material.
  */
 @Composable
-private fun SideNav(tab: Tab, onSelect: (Tab) -> Unit) {
+private fun SideNav(tab: Tab, onSelect: (Tab) -> Unit, hayActualizacion: Boolean) {
     Column(
         modifier = Modifier
             .fillMaxHeight()
             .width(240.dp)
             .background(MaterialTheme.colorScheme.surface)
             .padding(vertical = 30.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         TABS.forEach { t ->
             val selected = tab == t
@@ -189,7 +207,7 @@ private fun SideNav(tab: Tab, onSelect: (Tab) -> Unit) {
                 modifier = Modifier
                     .padding(horizontal = 18.dp)
                     .fillMaxWidth()
-                    .height(56.dp)
+                    .height(52.dp)
                     .onFocusChanged { enfocado = it.isFocused },
                 colors = tvCardColors(
                     containerColor = if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent,
@@ -201,12 +219,22 @@ private fun SideNav(tab: Tab, onSelect: (Tab) -> Unit) {
                     verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier.padding(horizontal = 16.dp),
                 ) {
-                    Icon(
-                        imageVector = iconOf(t),
-                        contentDescription = null,
-                        tint = colorTexto,
-                        modifier = Modifier.size(26.dp),
-                    )
+                    Box {
+                        Icon(
+                            imageVector = iconOf(t),
+                            contentDescription = null,
+                            tint = colorTexto,
+                            modifier = Modifier.size(26.dp),
+                        )
+                        if (hayActualizacion && t == Tab.Ajustes) {
+                            Box(
+                                Modifier
+                                    .align(Alignment.TopEnd)
+                                    .size(8.dp)
+                                    .background(MaterialTheme.colorScheme.error, CircleShape),
+                            )
+                        }
+                    }
                     Spacer(Modifier.width(16.dp))
                     Text(
                         text = t.label,
