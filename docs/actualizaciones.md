@@ -333,10 +333,10 @@ Un tag `mobile-v...` solo es válido si el cambio afecta a `app-mobile/` o a
 **El workflow falla en «Calcular versión y canales».**
 La etiqueta no coincide con `version.properties`, no hay cambios de código o el
 tag no tiene un formato válido. Si el run falló antes de `publish` y todavía no
-existe ninguna release, corrige en un commit nuevo y recrea la etiqueta solo tras
-comprobar que no hay release ni assets publicados. Si la release ya existe, sube
-la versión y publica una etiqueta nueva. No muevas una etiqueta publicada ni uses
-`git push --force` sobre etiquetas.
+existe ninguna release, corrige en un commit nuevo, sube la versión y crea una
+etiqueta nueva. Con la protección de tags activada no se puede borrar ni recrear
+la etiqueta vieja. Si la release ya existe, sube la versión y publica una etiqueta
+nueva. No muevas una etiqueta publicada ni uses `git push --force` sobre etiquetas.
 
 ---
 
@@ -356,9 +356,9 @@ En **Settings → Rules → Rulesets**, crea un ruleset para tags:
 - No bloquees la creación: el workflow crea las etiquetas de canal.
 - No añadas agentes ni cuentas de automatización a la lista de bypass.
 
-Así una etiqueta publicada no se puede borrar, mover ni reutilizar. Si un
-release falla antes de publicar, primero comprueba que no exista release y
-después recrea la etiqueta; si ya existe, sube la versión.
+Así una etiqueta no se puede borrar, mover ni reutilizar. Si un
+release falla antes de publicar, comprueba que no exista release, sube la versión
+y crea una etiqueta nueva; no intentes borrar ni recrear la etiqueta protegida.
 
 ### Rama main
 

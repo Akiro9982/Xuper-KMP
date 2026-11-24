@@ -123,8 +123,9 @@ coincidir exactamente con `version.properties`. El workflow compara el commit
 del tag con `origin/main` y falla si no son el mismo.
 
 - Si el workflow falla **antes** de `publish` y todavía no existe ninguna release
-  para esa etiqueta, puedes corregir en un commit nuevo y recrear la etiqueta
-  solo después de comprobar que no hay release ni assets publicados.
+  para esa etiqueta, corrige en un commit nuevo, sube la versión y crea una
+  etiqueta nueva. Con la protección de tags activada no se puede borrar ni
+  recrear la etiqueta vieja; no lo intentes.
 - Si la release ya existe, no muevas la etiqueta: sube la versión (por ejemplo,
   `0.2.0` -> `0.2.1`) y publica una etiqueta nueva. El workflow ya no edita
   releases publicadas: solo crea un draft, sube los assets y lo publica.
@@ -136,8 +137,9 @@ gh release view tv-vX.Y.Z
 gh release view desktop-vX.Y.Z
 ```
 
-Si no tienes `gh`, comprueba la página de releases en GitHub antes de borrar o
-recrear una etiqueta.
+Si no tienes `gh`, comprueba la página de releases en GitHub antes de decidir.
+Con la protección de tags activada, no borres ni muevas la etiqueta: sube la
+versión.
 
 ## Protecciones que deben configurarse en GitHub
 
@@ -156,9 +158,9 @@ En **Settings → Rules → Rulesets**, crea un ruleset para tags:
 - No bloquees la creación: el workflow necesita crear `mobile-v...`, etc.
 - Deja la lista de bypass sin agentes ni cuentas de automatización.
 
-Con esto, una etiqueta publicada no se puede borrar, mover ni reutilizar. Si un
-release falla antes de publicar, primero comprueba que no exista release y
-después recrea la etiqueta; si ya existe, sube la versión.
+Con esto, una etiqueta no se puede borrar, mover ni reutilizar. Si un
+release falla antes de publicar, sube la versión y crea una etiqueta nueva; no
+intentes borrar ni recrear la etiqueta protegida.
 
 ### Rama main
 
