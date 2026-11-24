@@ -322,8 +322,8 @@ por una instancia anterior, antivirus o una instalación en curso.
 
 **El workflow falla porque el tag no está en el último commit de `main`.**
 El workflow exige que el commit etiquetado sea el HEAD actual de `main`. Si
-`main` avanzó después de crear el tag, crea uno nuevo sobre el HEAD actual; no
-muevas el tag anterior. Si el tag ya tiene release, sube la versión.
+`main` avanzó después de crear el tag, no muevas el tag anterior: sube la versión
+y crea un tag nuevo sobre el HEAD actual.
 
 **El workflow falla porque el tag no coincide con las rutas.**
 Un tag `mobile-v...` solo es válido si el cambio afecta a `app-mobile/` o a
