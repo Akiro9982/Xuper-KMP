@@ -82,7 +82,7 @@ compose.desktop {
         nativeDistributions {
             targetFormats(TargetFormat.Msi, TargetFormat.Exe)
             packageName = "Xuper"
-            packageVersion = "0.1.0"
+            packageVersion = "0.1.1"
             description = "Xuper — cliente limpio de TV y VOD"
             vendor = "XuperClean"
 

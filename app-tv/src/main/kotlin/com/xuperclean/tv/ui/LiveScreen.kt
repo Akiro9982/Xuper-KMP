@@ -52,6 +52,7 @@ import com.xuperclean.tv.ui.common.UiState
 import com.xuperclean.tv.ui.common.rememberAsync
 import com.xuperclean.tv.ui.player.PlayerPayload
 import com.xuperclean.tv.ui.theme.tvCardColors
+import com.xuperclean.tv.ui.theme.tvFocusBorder
 import com.xuperclean.tv.ui.theme.tvChipColors
 
 /** Normaliza tildes y mayúsculas para que «pelicula» encuentre «Película». */
@@ -237,6 +238,7 @@ private fun ChannelCard(channel: Channel, onClick: () -> Unit) {
             .height(90.dp)
             .onFocusChanged { enfocado = it.isFocused },
         colors = tvCardColors(),
+        border = tvFocusBorder(),
     ) {
         Row(
             modifier = Modifier.padding(12.dp),

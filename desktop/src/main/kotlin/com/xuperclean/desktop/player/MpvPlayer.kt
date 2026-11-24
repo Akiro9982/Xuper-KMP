@@ -55,6 +55,8 @@ class MpvPlayer(
     var onPausedChange: ((Boolean) -> Unit)? = null
     /** Metadatos cargados (primer frame listo). */
     var onLoaded: (() -> Unit)? = null
+    /** Búfer VOD: segundo del stream hasta donde hay datos descargados. */
+    var onBuffer: ((Double) -> Unit)? = null
 
     /** Si se define, mpv escribe su log aquí (diagnóstico). */
     var logFile: File? = null
@@ -96,8 +98,10 @@ class MpvPlayer(
             add("--vo=gpu-next")
             add("--gpu-context=d3d11")
             add("--cache=yes")
-            add("--cache-secs=30")
-            add("--demuxer-readahead-secs=30")
+            // 120 s de antelación: la barra puede mostrar el tramo ya descargado y
+            // el reproductor aguanta mejor los cortes del CDN.
+            add("--cache-secs=120")
+            add("--demuxer-readahead-secs=120")
             add("--demuxer-max-bytes=64MiB")
             add("--network-timeout=20")
             add("--title=$title")
@@ -171,6 +175,7 @@ class MpvPlayer(
                 onProgress?.invoke(pos, duracion)
             }
             "pause" -> onPausedChange?.invoke(valor == "1")
+            "cache" -> valor.toDoubleOrNull()?.let { onBuffer?.invoke(it) }
             "end" -> when (valor) {
                 "eof" -> {
                     running = false
@@ -383,6 +388,16 @@ class MpvPlayer(
 
             mp.observe_property("pause", "bool", function(_, v)
                 enviar("pause " .. (v and "1" or "0"))
+            end)
+
+            -- Final del tramo descargado: pinta el búfer en la barra de avance.
+            local ultimoCache = -1
+            mp.observe_property("demuxer-cache-time", "number", function(_, v)
+                if v == nil then return end
+                if math.abs(v - ultimoCache) >= 1 or v < ultimoCache then
+                    ultimoCache = v
+                    enviar("cache " .. numero(v))
+                end
             end)
 
             mp.register_event("file-loaded", function() enviar("loaded") end)

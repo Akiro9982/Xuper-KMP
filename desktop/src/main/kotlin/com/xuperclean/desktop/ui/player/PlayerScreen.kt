@@ -27,12 +27,14 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
@@ -41,6 +43,7 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -62,6 +65,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.xuperclean.core.SubtitleTrack
@@ -104,7 +108,7 @@ sealed interface PlayerPayload {    val title: String
  *
  * Teclado: espacio = pausa · ←/→ = ±10 s (VOD) · Esc = volver.
  */
-@OptIn(ExperimentalComposeUiApi::class)
+@OptIn(ExperimentalComposeUiApi::class, ExperimentalMaterial3Api::class)
 @Composable
 fun PlayerScreen(
     payload: PlayerPayload,
@@ -171,6 +175,8 @@ fun PlayerScreen(
 
     var posicion by remember(payload) { mutableStateOf(0.0) }
     var duracion by remember(payload) { mutableStateOf(0.0) }
+    // Segundo del stream hasta donde hay datos descargados (franja gris del búfer).
+    var bufferedSegundos by remember(payload) { mutableStateOf(0.0) }
     var pausado by remember(payload) { mutableStateOf(false) }
     var arrastrando by remember(payload) { mutableStateOf(false) }
     var volumen by remember { mutableStateOf(100) }
@@ -367,6 +373,7 @@ fun PlayerScreen(
             }
         }
         player.onPausedChange = { pausado = it }
+        player.onBuffer = { fin -> bufferedSegundos = fin }
         player.onLoaded = {
             resolviendo = false
             val objetivo = reanudarEn
@@ -717,6 +724,16 @@ fun PlayerScreen(
                         mpv?.seekTo(destino)
                     },
                     valueRange = 0f..duracion.toFloat().coerceAtLeast(1f),
+                    // Tramo descargado en gris detrás del avance real.
+                    track = { estado ->
+                        val rango = estado.valueRange
+                        val total = (rango.endInclusive - rango.start).coerceAtLeast(1f)
+                        PistaConBuffer(
+                            fraccionReproducida = (estado.value - rango.start) / total,
+                            fraccionBuffer = ((bufferedSegundos - rango.start) / total).toFloat(),
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    },
                     modifier = Modifier.weight(1f),
                 )
                 Text(
@@ -816,6 +833,34 @@ private val hiddenPlayerCursor: java.awt.Cursor by lazy {
         java.awt.Point(0, 0),
         "player-hidden",
     )
+}
+
+/**
+ * Pista de la barra de avance con el tramo ya descargado.
+ *
+ * El gris representa lo que está en caché (se puede avanzar sin cortes) y el violeta
+ * lo reproducido. En VOD largos el tramo gris es fino: es proporcional al búfer real.
+ */
+@Composable
+private fun PistaConBuffer(
+    fraccionReproducida: Float,
+    fraccionBuffer: Float,
+    modifier: Modifier = Modifier,
+) {
+    val primario = MaterialTheme.colorScheme.primary
+    val grisBuffer = Color(0xFFB3B3B3)
+    val pista = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.20f)
+    val f = fraccionReproducida.coerceIn(0f, 1f)
+    val fb = fraccionBuffer.coerceIn(0f, 1f).coerceAtLeast(f)
+    Box(
+        modifier
+            .height(6.dp)
+            .clip(RoundedCornerShape(3.dp))
+            .background(pista),
+    ) {
+        Box(Modifier.fillMaxWidth(fb).fillMaxHeight().background(grisBuffer))
+        Box(Modifier.fillMaxWidth(f).fillMaxHeight().background(primario))
+    }
 }
 
 private fun formatearTiempo(segundos: Double): String {

@@ -45,6 +45,7 @@ fun main() {
     var pos = 0.0
     var dur = 0.0
     var pausado = false
+    var cache = 0.0
     val cargado = CountDownLatch(1)
     val finalizado = CountDownLatch(1)
 
@@ -53,6 +54,7 @@ fun main() {
     }).apply {
         onProgress = { p, d -> pos = p; if (d > 0) dur = d }
         onPausedChange = { pausado = it }
+        onBuffer = { cache = it }
         onLoaded = { cargado.countDown() }
         onEnd = { finalizado.countDown() }
     }
@@ -67,6 +69,7 @@ fun main() {
 
     Thread.sleep(2500)
     println("pos2: $pos  avance: ${"%.2f".format(pos - pos1)} s")
+    println("buffer (fin descargado): ${"%.2f".format(cache)} s")
 
     println("seek -> 120 s")
     player.seekTo(120.0)

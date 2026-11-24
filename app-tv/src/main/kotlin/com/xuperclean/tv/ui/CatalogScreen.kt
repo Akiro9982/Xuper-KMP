@@ -25,6 +25,7 @@ import com.xuperclean.tv.ui.common.LoadingState
 import com.xuperclean.tv.ui.common.PosterImage
 import com.xuperclean.tv.ui.common.UiState
 import com.xuperclean.tv.ui.common.rememberAsync
+import com.xuperclean.tv.ui.theme.tvFocusBorder
 
 /** Secciones de catálogo: filtros reales sobre el pool del home (type/tags del portal). */
 enum class CatalogKind(val title: String, val matches: (VodAsset) -> Boolean) {
@@ -100,6 +101,7 @@ private fun GridCard(asset: VodAsset, onOpenAsset: (VodAsset) -> Unit) {
         modifier = Modifier
             .fillMaxWidth()
             .aspectRatio(16f / 9f),
+        border = tvFocusBorder(),
     ) {
         Box {
             PosterImage(asset = asset, modifier = Modifier.fillMaxSize(), showTitle = true, light = true)

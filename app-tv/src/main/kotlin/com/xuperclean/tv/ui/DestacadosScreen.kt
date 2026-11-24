@@ -36,6 +36,7 @@ import com.xuperclean.tv.ui.common.LoadingState
 import com.xuperclean.tv.ui.common.PosterImage
 import com.xuperclean.tv.ui.common.UiState
 import com.xuperclean.tv.ui.common.rememberAsync
+import com.xuperclean.tv.ui.theme.tvFocusBorder
 
 /** Degradado del hero (precalculado, un solo objeto). */
 private val HeroScrim = Brush.verticalGradient(
@@ -129,6 +130,7 @@ private fun HeroCard(asset: VodAsset, onOpenAsset: (VodAsset) -> Unit) {
             .padding(horizontal = 32.dp)
             .fillMaxWidth()
             .height(300.dp),
+        border = tvFocusBorder(grosor = 4.dp),
     ) {
         Box {
             PosterImage(asset = asset, modifier = Modifier.fillMaxSize(), light = false)
@@ -179,6 +181,7 @@ private fun ContinueCard(item: WatchProgress, onResume: (WatchProgress) -> Unit)
         modifier = Modifier
             .height(150.dp)
             .width(266.dp),
+        border = tvFocusBorder(),
     ) {
         Box {
             PosterImage(
@@ -214,6 +217,7 @@ private fun RowCard(asset: VodAsset, onOpenAsset: (VodAsset) -> Unit) {
         modifier = Modifier
             .height(150.dp)
             .width(266.dp),
+        border = tvFocusBorder(),
     ) {
         PosterImage(asset = asset, modifier = Modifier.fillMaxSize(), showTitle = true, light = true)
     }

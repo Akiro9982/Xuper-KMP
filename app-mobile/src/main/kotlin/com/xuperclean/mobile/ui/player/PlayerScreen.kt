@@ -23,8 +23,13 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
+import androidx.media3.exoplayer.video.VideoFrameMetadataListener
+import java.util.concurrent.atomic.AtomicLong
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -98,6 +103,7 @@ sealed interface PlayerPayload {
  * - botón inmersivo (oculta barras del sistema) y cierre
  * - un solo player por pantalla, liberación garantizada
  */
+@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
     val context = LocalContext.current
@@ -277,7 +283,11 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
     }
 
     val player = remember(payload) {
-        ExoPlayer.Builder(context)
+        // Fallback de decodificadores: si el del fabricante falla, Media3 prueba otro
+        // en lugar de dejar la imagen en negro.
+        val renderizadores = androidx.media3.exoplayer.DefaultRenderersFactory(context)
+            .setEnableDecoderFallback(true)
+        ExoPlayer.Builder(context, renderizadores)
             .setMediaSourceFactory(
                 DefaultMediaSourceFactory(fuenteDeDatos)
             )
@@ -286,7 +296,7 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
                     // Buffer profundo: los CDN del portal entregan segmentos irregulares (#1).
                     .setBufferDurationsMs(
                         15_000, // mínimo antes de reproducir
-                        30_000, // máximo en memoria
+                        120_000, // máximo en memoria: banda de búfer visible y margen ante cortes
                         2_500,  // arranque
                         5_000,  // tras un rebuffer
                     )
@@ -312,6 +322,53 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
                     }
                 })
             }
+    }
+
+    // --- Vigilancia de imagen congelada -------------------------------------
+    // En algunos decodificadores del fabricante la imagen se detiene y el audio sigue
+    // sonando; retroceder un poco lo arregla, así que aquí se detecta el síncope y se
+    // refresca el decodificador automáticamente, sin que el usuario toque nada.
+    val ultimoFotogramaMs = remember(player) { AtomicLong(0L) }
+    val latidoVideo = remember(player) {
+        VideoFrameMetadataListener { _, _, _, _ ->
+            val ahora = android.os.SystemClock.elapsedRealtime()
+            if (ultimoFotogramaMs.getAndSet(ahora) == 0L) {
+                android.util.Log.i("XuperPlayer", "Primer fotograma pintado")
+            }
+        }
+    }
+    DisposableEffect(player) {
+        player.setVideoFrameMetadataListener(latidoVideo)
+        onDispose { player.clearVideoFrameMetadataListener(latidoVideo) }
+    }
+
+    LaunchedEffect(player, streamUrl, isLive) {
+        if (isLive) return@LaunchedEffect
+        var posicionPrevia = -1L
+        var ultimaRecuperacion = 0L
+        while (true) {
+            delay(1_000)
+            val ahora = android.os.SystemClock.elapsedRealtime()
+            val pos = player.currentPosition
+            val avanza = pos - posicionPrevia >= 800
+            posicionPrevia = pos
+            val ultimo = ultimoFotogramaMs.get()
+            val imagenQuieta = ultimo > 0L && ahora - ultimo > 3_500
+            val duracion = player.duration
+            val enReproduccion = player.isPlaying &&
+                player.playbackState == Player.STATE_READY &&
+                (duracion <= 0L || pos < duracion - 10_000)
+            if (imagenQuieta && avanza && enReproduccion && ahora - ultimaRecuperacion > 10_000) {
+                ultimaRecuperacion = ahora
+                // Evita reintentos mientras el decodificador se rearma.
+                ultimoFotogramaMs.set(ahora)
+                android.util.Log.w(
+                    "XuperPlayer",
+                    "Imagen congelada en ${pos} ms con audio activo: refrescando decodificador",
+                )
+                player.seekTo((pos - 1_000).coerceAtLeast(0L))
+            }
+        }
     }
 
     DisposableEffect(player) {
@@ -378,6 +435,8 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
     // estado de reproducción (para controles)
     var positionMs by remember { mutableLongStateOf(0L) }
     var durationMs by remember { mutableLongStateOf(0L) }
+    // Tramo ya descargado (búfer) para pintarlo en gris en la barra.
+    var bufferedMs by remember { mutableLongStateOf(0L) }
     var isPlaying by remember { mutableStateOf(false) }
     var controlsVisible by remember { mutableStateOf(true) }
     var inmersivo by remember { mutableStateOf(false) }
@@ -393,6 +452,7 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
             posicionActual = positionMs
             durationMs = player.duration.coerceAtLeast(0L)
             duracionActual = durationMs
+            bufferedMs = player.bufferedPosition.coerceAtLeast(positionMs)
             isPlaying = player.isPlaying
             if (!isLive && durationMs > 0 &&
                 kotlin.math.abs(positionMs - ultimoGuardado) >= 15_000
@@ -593,6 +653,15 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
                             activeTrackColor = MaterialTheme.colorScheme.primary,
                             inactiveTrackColor = Color.White.copy(alpha = 0.25f),
                         ),
+                        track = { estado ->
+                            PistaConBuffer(
+                                fraccionReproducida = estado.value,
+                                fraccionBuffer = if (durationMs > 0) {
+                                    bufferedMs.toFloat() / durationMs
+                                } else 0f,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        },
                         modifier = Modifier.fillMaxWidth(),
                     )
                     Row {
@@ -688,6 +757,34 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
         } else {
             c.show(androidx.core.view.WindowInsetsCompat.Type.systemBars())
         }
+    }
+}
+
+/**
+ * Pista de la barra de avance con el tramo ya descargado.
+ *
+ * El gris representa lo que está en memoria (se puede avanzar sin cortes) y el
+ * violeta lo reproducido; así se ve de un vistazo cuánto hay por delante.
+ */
+@Composable
+private fun PistaConBuffer(
+    fraccionReproducida: Float,
+    fraccionBuffer: Float,
+    modifier: Modifier = Modifier,
+) {
+    val primario = MaterialTheme.colorScheme.primary
+    val grisBuffer = Color(0xFFB3B3B3)
+    val pista = Color.White.copy(alpha = 0.22f)
+    val f = fraccionReproducida.coerceIn(0f, 1f)
+    val fb = fraccionBuffer.coerceIn(0f, 1f).coerceAtLeast(f)
+    Box(
+        modifier
+            .height(6.dp)
+            .clip(RoundedCornerShape(3.dp))
+            .background(pista),
+    ) {
+        Box(Modifier.fillMaxWidth(fb).fillMaxHeight().background(grisBuffer))
+        Box(Modifier.fillMaxWidth(f).fillMaxHeight().background(primario))
     }
 }
 

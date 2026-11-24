@@ -1,8 +1,15 @@
 package com.xuperclean.tv.ui.theme
 
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.dp
+import androidx.tv.material3.Border
+import androidx.tv.material3.ClickableSurfaceBorder
 import androidx.tv.material3.ClickableSurfaceColors
 import androidx.tv.material3.ClickableSurfaceDefaults
 import androidx.tv.material3.ExperimentalTvMaterial3Api
@@ -28,6 +35,30 @@ fun tvCardColors(
     focusedContentColor = MaterialTheme.colorScheme.onPrimaryContainer,
     pressedContainerColor = MaterialTheme.colorScheme.primaryContainer,
     pressedContentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+)
+
+/**
+ * Contorno de foco de las tarjetas de contenido.
+ *
+ * tv-material solo agranda la tarjeta al enfocarla; a distancia eso no basta para
+ * saber qué elemento está seleccionado. Este borde lo dibuja el propio Surface
+ * (dentro de su escala), así que acompaña al póster y desaparece al perder el foco.
+ *
+ * @param grosor ancho del trazo en reposo de foco.
+ * @param separacion cuánto se separa el trazo del borde de la tarjeta.
+ */
+@Composable
+fun tvFocusBorder(
+    grosor: Dp = 3.dp,
+    color: Color = MaterialTheme.colorScheme.primary,
+    forma: Shape = RoundedCornerShape(10.dp),
+    separacion: Dp = 2.dp,
+): ClickableSurfaceBorder = ClickableSurfaceDefaults.border(
+    focusedBorder = Border(
+        border = BorderStroke(grosor, color),
+        inset = separacion,
+        shape = forma,
+    ),
 )
 
 /**

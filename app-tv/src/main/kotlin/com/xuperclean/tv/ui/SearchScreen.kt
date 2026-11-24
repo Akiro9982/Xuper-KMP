@@ -30,6 +30,7 @@ import com.xuperclean.tv.ui.common.LoadingState
 import com.xuperclean.tv.ui.common.PosterImage
 import com.xuperclean.tv.ui.common.UiState
 import com.xuperclean.tv.ui.common.rememberAsync
+import com.xuperclean.tv.ui.theme.tvFocusBorder
 
 @Composable
 fun SearchScreen(onOpenAsset: (VodAsset) -> Unit) {
@@ -99,6 +100,7 @@ private fun SearchGrid(items: List<com.xuperclean.core.SearchResult>, onOpenAsse
                 modifier = Modifier
                     .fillMaxWidth()
                     .aspectRatio(16f / 9f),
+                border = tvFocusBorder(),
             ) {
                 Box {
                     PosterImage(

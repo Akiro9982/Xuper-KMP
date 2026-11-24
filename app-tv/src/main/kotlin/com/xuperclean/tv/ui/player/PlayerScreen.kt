@@ -310,7 +310,8 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
             .setLoadControl(
                 DefaultLoadControl.Builder()
                     // Buffer profundo: los CDN del portal entregan segmentos irregulares (#1).
-                    .setBufferDurationsMs(15_000, 30_000, 2_500, 5_000)
+                    // 120 s en memoria: la banda gris del búfer se ve y hay margen ante cortes.
+                    .setBufferDurationsMs(15_000, 120_000, 2_500, 5_000)
                     .build()
             )
             .build()
@@ -400,6 +401,8 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
     var overlayTick by remember { mutableIntStateOf(0) }
     var positionMs by remember { mutableLongStateOf(0L) }
     var durationMs by remember { mutableLongStateOf(0L) }
+    // Tramo ya descargado (búfer). Se dibuja en gris detrás de lo reproducido.
+    var bufferedMs by remember { mutableLongStateOf(0L) }
     var isPlaying by remember { mutableStateOf(false) }
     // Encuadre del vídeo y zona del mando que tiene el indicador de foco.
     var ajusteImagen by remember { mutableStateOf(AjusteImagen.AJUSTAR) }
@@ -414,6 +417,7 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
             posicionActual = positionMs
             durationMs = player.duration.coerceAtLeast(0L)
             duracionActual = durationMs
+            bufferedMs = player.bufferedPosition.coerceAtLeast(positionMs)
             isPlaying = player.isPlaying
             if (!isLive && durationMs > 0 &&
                 kotlin.math.abs(positionMs - ultimoGuardado) >= 15_000
@@ -670,6 +674,9 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
                     BarraProgreso(
                         fraccion = if (durationMs > 0) {
                             positionMs.toFloat() / durationMs
+                        } else 0f,
+                        fraccionBuffer = if (durationMs > 0) {
+                            bufferedMs.toFloat() / durationMs
                         } else 0f,
                         enfocada = zonaOverlay == ZonaOverlay.PROGRESO,
                         modifier = Modifier.fillMaxWidth(),
@@ -963,19 +970,25 @@ private fun BotonOverlay(
 }
 
 /**
- * Barra de progreso con indicador de foco: al estar seleccionada se engrosa, se
- * enmarca con el color primario y muestra un pulgar en la posición actual.
+ * Barra de progreso con indicador de foco y tramo descargado.
+ *
+ * Al estar seleccionada se engrosa, se enmarca con el color primario y muestra un
+ * pulgar en la posición actual. El búfer (lo ya descargado) va en gris por detrás
+ * del tramo reproducido, para saber cuánto se puede avanzar sin cortes.
  */
 @Composable
 private fun BarraProgreso(
     fraccion: Float,
+    fraccionBuffer: Float = 0f,
     enfocada: Boolean,
     modifier: Modifier = Modifier,
 ) {
     val primario = MaterialTheme.colorScheme.primary
     val grosor by animateDpAsState(if (enfocada) 8.dp else 4.dp, label = "barra-grosor")
-    val pista = Color.White.copy(alpha = if (enfocada) 0.34f else 0.20f)
+    val pista = Color.White.copy(alpha = if (enfocada) 0.26f else 0.16f)
+    val grisBuffer = Color(0xFFB3B3B3).copy(alpha = if (enfocada) 1f else 0.92f)
     val f = fraccion.coerceIn(0f, 1f)
+    val fb = fraccionBuffer.coerceIn(0f, 1f).coerceAtLeast(f)
     Canvas(modifier.height(24.dp)) {
         val alto = grosor.toPx()
         val y = (size.height - alto) / 2f
@@ -995,6 +1008,15 @@ private fun BarraProgreso(
             size = Size(size.width, alto),
             cornerRadius = CornerRadius(radio),
         )
+        if (fb > 0f) {
+            // Tramo en memoria: gris opaco, por debajo del avance real.
+            drawRoundRect(
+                color = grisBuffer,
+                topLeft = Offset(0f, y),
+                size = Size(size.width * fb, alto),
+                cornerRadius = CornerRadius(radio),
+            )
+        }
         if (f > 0f) {
             drawRoundRect(
                 color = primario,

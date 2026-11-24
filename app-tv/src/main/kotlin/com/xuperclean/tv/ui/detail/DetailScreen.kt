@@ -53,6 +53,7 @@ import com.xuperclean.tv.ui.common.UiState
 import com.xuperclean.tv.ui.common.rememberAsync
 import com.xuperclean.tv.ui.player.PlayerPayload
 import com.xuperclean.tv.ui.theme.tvCardColors
+import com.xuperclean.tv.ui.theme.tvFocusBorder
 import com.xuperclean.tv.ui.theme.tvChipColors
 
 private val DetailScrim = Brush.verticalGradient(
@@ -306,6 +307,7 @@ private fun EpisodeCard(
         },
         colors = tvCardColors(),
         shape = ClickableSurfaceDefaults.shape(shape = MaterialTheme.shapes.medium),
+        border = tvFocusBorder(),
         modifier = modifier
             .fillMaxWidth()
             .height(84.dp),
@@ -353,6 +355,7 @@ private fun RelatedRow(asset: VodAsset, onOpenAsset: (VodAsset) -> Unit, onPlay:
                             modifier = Modifier
                                 .width(220.dp)
                                 .height(124.dp),
+                            border = tvFocusBorder(),
                         ) {
                             PosterImage(asset = rel, modifier = Modifier.fillMaxSize(), showTitle = true, light = true)
                         }
