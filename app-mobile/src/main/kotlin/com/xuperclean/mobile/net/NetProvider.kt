@@ -20,7 +20,11 @@ object NetProvider {
             .dns(dns)
             .sslSocketFactory(tls.socketFactory, tls.trustManager)
             .connectTimeout(10, TimeUnit.SECONDS)
-            .readTimeout(25, TimeUnit.SECONDS)
+            // Un socket muerto se detecta antes y el reintento automático del reproductor
+            // reabre la descarga en la posición actual (antes se esperaban 25 s).
+            .readTimeout(15, TimeUnit.SECONDS)
+            .writeTimeout(15, TimeUnit.SECONDS)
+            .retryOnConnectionFailure(true)
             .followRedirects(true)
             .build()
     }

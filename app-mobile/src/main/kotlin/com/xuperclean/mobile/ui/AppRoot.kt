@@ -70,8 +70,10 @@ fun AppRoot() {
 
     if (overlay is Overlay.Player) {
         // Reproductor inmersivo: sin barra, con su propio botón de cierre
+        // El propio reproductor gestiona «atrás»: primero sale de pantalla completa y
+        // sólo después cierra (#19). Un BackHandler aquí registrado después del suyo
+        // se quedaba con la tecla y salía del vídeo sin respetar la pantalla completa.
         PlayerScreen(payload = overlay.payload, onClose = { pop() })
-        BackHandler(enabled = true) { pop() }
         return
     }
 

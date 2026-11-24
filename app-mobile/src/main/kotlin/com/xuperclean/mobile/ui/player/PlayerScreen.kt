@@ -1,13 +1,21 @@
 package com.xuperclean.mobile.ui.player
 
+import android.view.SurfaceHolder
+import android.view.SurfaceView
 import android.view.ViewGroup
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.fadeIn
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.material.icons.filled.FullscreenExit
@@ -29,6 +37,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clip
 import androidx.media3.exoplayer.video.VideoFrameMetadataListener
+import java.io.IOException
 import java.util.concurrent.atomic.AtomicLong
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -66,7 +75,14 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.datasource.okhttp.OkHttpDataSource
+import androidx.media3.common.Format
+import androidx.media3.common.VideoSize
 import androidx.media3.exoplayer.DefaultLoadControl
+import androidx.media3.exoplayer.analytics.AnalyticsListener
+import androidx.media3.exoplayer.DecoderReuseEvaluation
+import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
+import androidx.media3.exoplayer.source.LoadEventInfo
+import androidx.media3.exoplayer.source.MediaLoadData
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.ui.AspectRatioFrameLayout
@@ -75,6 +91,7 @@ import com.xuperclean.core.model.EpisodeInfo
 import com.xuperclean.core.model.VodAsset
 import com.xuperclean.core.SubtitleTrack
 import com.xuperclean.mobile.data.VodStream
+import com.xuperclean.mobile.diag.Diag
 import com.xuperclean.mobile.data.XuperRepository
 import com.xuperclean.mobile.net.NetProvider
 import kotlinx.coroutines.delay
@@ -107,6 +124,7 @@ sealed interface PlayerPayload {
 @Composable
 fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
     val context = LocalContext.current
+    Diag.init(context.applicationContext)
     var resolviendo by remember(payload) { mutableStateOf(true) }
     var errorMsg by remember(payload) { mutableStateOf<String?>(null) }
     var streamUrl by remember(payload) { mutableStateOf<String?>(null) }
@@ -114,12 +132,17 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
     // fábrica las lee en cada `createDataSource()`: cambiar de fuente no recrea el
     // reproductor (no se pierde la posición) y las cabeceras siguen siendo válidas.
     val cabeceras = remember(payload) { java.util.HashMap<String, String>() }
+    // Bytes reales descargados: permite distinguir un corte de red de uno del decodificador.
+    val bytesDescargados = remember(payload) { AtomicLong(0L) }
     val fuenteDeDatos = remember(payload) {
         object : androidx.media3.datasource.DataSource.Factory {
             override fun createDataSource(): androidx.media3.datasource.DataSource =
-                OkHttpDataSource.Factory(NetProvider.okHttpClient)
-                    .setDefaultRequestProperties(cabeceras)
-                    .createDataSource()
+                ContadorDatos(
+                    OkHttpDataSource.Factory(NetProvider.okHttpClient)
+                        .setDefaultRequestProperties(cabeceras)
+                        .createDataSource(),
+                    bytesDescargados,
+                )
         }
     }
     var isLive by remember(payload) { mutableStateOf(false) }
@@ -138,11 +161,19 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
     var playerView by remember { mutableStateOf<PlayerView?>(null) }
     var reanudarEn by remember(payload) { mutableLongStateOf(0L) }
     var posicionActual by remember { mutableLongStateOf(0L) }
+    // Última posición con contenido: al cambiar de fuente el player vuelve a 0 y no se
+    // debe confundir con el inicio de la película (#1).
+    var ultimaPosicionValida by remember { mutableLongStateOf(0L) }
     var duracionActual by remember { mutableLongStateOf(0L) }
     var episodioActual by remember(payload) {
         mutableStateOf<com.xuperclean.core.model.EpisodeInfo?>(null)
     }
     var ultimoGuardado by remember(payload) { mutableLongStateOf(0L) }
+    // Recuperación automática ante cortes de red o del decodificador (#12).
+    var reintentando by remember(payload) { mutableIntStateOf(0) }
+    var reintento by remember(payload) { mutableIntStateOf(0) }
+    var esperaReintento by remember(payload) { mutableLongStateOf(0L) }
+    var reintentoAgotado by remember(payload) { mutableStateOf(false) }
 
     /** Guarda el avance local (solo VOD, nunca live) (#8). */
     fun guardarProgreso(posMs: Long, durMs: Long) {
@@ -190,8 +221,13 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
     fun usarSiguiente(): Boolean {
         val siguiente = alternativas.firstOrNull() ?: return false
         alternativas = alternativas.drop(1)
+        // Fuente nueva: sin espera ni aviso de los reintentos de la anterior.
+        reintentando = 0
+        esperaReintento = 0L
+        reintentoAgotado = false
+        errorMsg = null
         // Un fallo de CDN no debe reiniciar la película: se retoma donde iba (#1).
-        if (!isLive) reanudarEn = posicionActual
+        if (!isLive) reanudarEn = maxOf(posicionActual, ultimaPosicionValida)
         usarFuente(siguiente.first, siguiente.second)
         fuenteActual = fuentes.indexOfFirst { it.url == siguiente.first }.coerceAtLeast(0)
         return true
@@ -199,10 +235,25 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
 
     fun aplicarFuente(indice: Int) {
         val fuente = fuentes.getOrNull(indice) ?: return
-        reanudarEn = posicionActual
+        reanudarEn = maxOf(posicionActual, ultimaPosicionValida)
         usarFuente(fuente.url, fuente.headers)
         fuenteActual = indice
         alternativas = fuentes.filterIndexed { i, _ -> i != indice }.map { it.url to it.headers }
+        reintentando = 0
+        esperaReintento = 0L
+        reintentoAgotado = false
+        errorMsg = null
+    }
+
+    /** Reintento manual desde el aviso de error: no hace falta salir del reproductor. */
+    fun reintentarAhora() {
+        if (streamUrl == null) return
+        reintentando = 0
+        reintentoAgotado = false
+        errorMsg = null
+        esperaReintento = 0L
+        if (!isLive) reanudarEn = maxOf(posicionActual, ultimaPosicionValida)
+        reintento++
     }
 
     LaunchedEffect(payload) {
@@ -282,11 +333,23 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
         }
     }
 
+    val diagnostico = remember(payload) { DiagnosticoListener() }
+
     val player = remember(payload) {
         // Fallback de decodificadores: si el del fabricante falla, Media3 prueba otro
-        // en lugar de dejar la imagen en negro.
+        // en lugar de dejar la imagen en negro. El fichero `sw` fuerza software.
+        val selector = if (Diag.forzarSoftware) {
+            MediaCodecSelector { tipo, seguro, tunel ->
+                MediaCodecSelector.DEFAULT.getDecoderInfos(tipo, seguro, tunel)
+                    .filterNot { it.hardwareAccelerated }
+                    .ifEmpty { MediaCodecSelector.DEFAULT.getDecoderInfos(tipo, seguro, tunel) }
+            }
+        } else {
+            MediaCodecSelector.DEFAULT
+        }
         val renderizadores = androidx.media3.exoplayer.DefaultRenderersFactory(context)
             .setEnableDecoderFallback(true)
+            .setMediaCodecSelector(selector)
         ExoPlayer.Builder(context, renderizadores)
             .setMediaSourceFactory(
                 DefaultMediaSourceFactory(fuenteDeDatos)
@@ -304,11 +367,37 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
             )
             .build()
             .apply {
+                addAnalyticsListener(diagnostico)
                 addListener(object : Player.Listener {
                     override fun onPlayerError(error: PlaybackException) {
+                        Diag.w(
+                            "Error de reproducción ${error.errorCode} en ${currentPosition} ms: " +
+                                error.message,
+                            error,
+                        )
                         // Corte de CDN: pasar a la siguiente fuente antes de rendirse.
-                        if (!usarSiguiente()) {
+                        if (usarSiguiente()) return
+                        // Fallo transitorio (red caída, tiempo de espera agotado, decodificador
+                        // reiniciado): se reintenta solo, conservando la posición. Antes, un corte
+                        // de wifi dejaba el reproductor en IDLE para siempre.
+                        val codigo = error.errorCode
+                        val transitorio = codigo in 2_000..2_008 ||
+                            codigo == PlaybackException.ERROR_CODE_DECODING_FAILED ||
+                            codigo == PlaybackException.ERROR_CODE_DECODER_INIT_FAILED ||
+                            codigo == PlaybackException.ERROR_CODE_UNSPECIFIED
+                        if (transitorio && reintentando < 12) {
+                            reintentando++
+                            errorMsg = null
+                            reintentoAgotado = false
+                            if (!isLive) reanudarEn = maxOf(posicionActual, ultimaPosicionValida)
+                            // 2, 4, 8, 16 y luego 30 s entre intentos.
+                            esperaReintento =
+                                (2_000L shl (reintentando - 1).coerceAtMost(4))
+                                    .coerceAtMost(30_000L)
+                            reintento++
+                        } else {
                             errorMsg = "El stream se detuvo o no está disponible."
+                            reintentoAgotado = true
                         }
                     }
 
@@ -318,6 +407,10 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
                         if (playbackState == Player.STATE_READY && reanudarEn > 0L) {
                             seekTo(reanudarEn)
                             reanudarEn = 0L
+                        }
+                        if (playbackState == Player.STATE_READY) {
+                            reintentando = 0
+                            reintentoAgotado = false
                         }
                     }
                 })
@@ -346,41 +439,94 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
         if (isLive) return@LaunchedEffect
         var posicionPrevia = -1L
         var ultimaRecuperacion = 0L
+        var ultimoRearme = 0L
+        var seeksSeguidos = 0
+        var bytesPrevios = bytesDescargados.get()
+        var instanteBytes = android.os.SystemClock.elapsedRealtime()
+        var tasaBps = 0L
         while (true) {
             delay(1_000)
             val ahora = android.os.SystemClock.elapsedRealtime()
+            val bytesAhora = bytesDescargados.get()
+            val transcurrido = (ahora - instanteBytes).coerceAtLeast(1L)
+            if (bytesAhora > bytesPrevios) {
+                tasaBps = (bytesAhora - bytesPrevios) * 1_000 / transcurrido
+                bytesPrevios = bytesAhora
+                instanteBytes = ahora
+            }
             val pos = player.currentPosition
             val avanza = pos - posicionPrevia >= 800
             posicionPrevia = pos
             val ultimo = ultimoFotogramaMs.get()
-            val imagenQuieta = ultimo > 0L && ahora - ultimo > 3_500
             val duracion = player.duration
+            val bufDelante = player.bufferedPosition - pos
+            val cargando = player.isLoading
+            // Sólo hay atasco del decodificador si sobran datos: con el búfer vacío o
+            // cargando el problema es la red, y un seek ahí reinicia la descarga y empeora
+            // el corte (producía ciclos de congelación/reanudación).
+            val imagenQuieta = !cargando && bufDelante > 4_000 &&
+                ultimo > 0L && ahora - ultimo > 5_000
             val enReproduccion = player.isPlaying &&
                 player.playbackState == Player.STATE_READY &&
                 (duracion <= 0L || pos < duracion - 10_000)
-            if (imagenQuieta && avanza && enReproduccion && ahora - ultimaRecuperacion > 10_000) {
+            Diag.v(
+                "pos=$pos dur=$duracion buf=${player.bufferedPosition - pos} " +
+                    "estado=${nombreEstado(player.playbackState)} playing=${player.isPlaying} " +
+                    "loading=${player.isLoading} dec=${diagnostico.decodificador ?: "-"} " +
+                    "bajados=${bytesAhora / 1024}KB tasa=${tasaBps / 1024}KB/s " +
+                    "descartados=${diagnostico.descartados} underrun=${diagnostico.underruns} " +
+                    "frameHace=${if (ultimo > 0L) ahora - ultimo else -1}ms",
+            )
+            if (imagenQuieta && avanza && enReproduccion && ahora - ultimaRecuperacion > 15_000) {
                 ultimaRecuperacion = ahora
                 // Evita reintentos mientras el decodificador se rearma.
                 ultimoFotogramaMs.set(ahora)
-                android.util.Log.w(
-                    "XuperPlayer",
-                    "Imagen congelada en ${pos} ms con audio activo: refrescando decodificador",
+                Diag.w(
+                    "Imagen congelada en ${pos} ms con audio activo: refrescando decodificador " +
+                        "(buf=$bufDelante carga=$cargando dec=${diagnostico.decodificador} " +
+                        "descartados=${diagnostico.descartados})",
                 )
-                player.seekTo((pos - 1_000).coerceAtLeast(0L))
+                Diag.volcarHilos("imagen congelada en ${pos} ms")
+                if (seeksSeguidos >= 1 && ahora - ultimoRearme > 30_000) {
+                    // El seek no bastó: se rearma la superficie de vídeo, que reinicia el
+                    // códec sin tocar el audio ni volver a descargar el tramo.
+                    seeksSeguidos = 0
+                    ultimoRearme = ahora
+                    Diag.w("Reaplicando superficie de vídeo para reiniciar el códec")
+                    val vista = playerView?.videoSurfaceView as? SurfaceView
+                    if (vista != null) {
+                        player.clearVideoSurface()
+                        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(
+                            { player.setVideoSurfaceView(vista) },
+                            400L,
+                        )
+                    }
+                } else {
+                    seeksSeguidos++
+                    player.seekTo((pos - 1_000).coerceAtLeast(0L))
+                }
+            } else if (ahora - ultimo < 3_000 && ahora - ultimaRecuperacion > 20_000) {
+                // Imagen sana: se olvidan los rearmes para no encadenar castigos.
+                seeksSeguidos = 0
             }
         }
     }
 
     DisposableEffect(player) {
         onDispose {
+            Diag.i("Reproductor liberado en ${player.currentPosition} ms")
             guardarProgreso(posicionActual, duracionActual)
             player.stop()
             player.release()
         }
     }
 
-    LaunchedEffect(player, streamUrl) {
+    LaunchedEffect(player, streamUrl, reintento) {
         val url = streamUrl ?: return@LaunchedEffect
+        if (reintento > 0 && esperaReintento > 0L) {
+            Diag.i("Reintento ${reintentando} de la fuente en ${esperaReintento} ms")
+            delay(esperaReintento)
+        }
         val item = MediaItem.Builder()
             .setUri(url)
             .apply {
@@ -450,6 +596,7 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
             delay(500)
             positionMs = player.currentPosition
             posicionActual = positionMs
+            if (positionMs > 0L) ultimaPosicionValida = positionMs
             durationMs = player.duration.coerceAtLeast(0L)
             duracionActual = durationMs
             bufferedMs = player.bufferedPosition.coerceAtLeast(positionMs)
@@ -475,17 +622,40 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
     }
 
     BackHandler {
+        Diag.i("Atrás pulsado (inmersivo=$inmersivo)")
         if (inmersivo) inmersivo = false else onClose()
     }
 
     Box(
         Modifier
             .fillMaxSize()
-            .background(Color.Black),
+            .background(Color.Black)
+            // El gesto vive en la CAJA PADRE, no en una capa hermana: así los botones
+            // del panel siempre reciben el toque y sólo el vídeo lo usa para ocultar
+            // o mostrar los controles (#19).
+            .pointerInput(player, isLive) {
+                detectTapGestures(
+                    onTap = { _ ->
+                        controlsVisible = !controlsVisible
+                        interactionTick++
+                    },
+                    onDoubleTap = { point ->
+                        touchControls()
+                        if (!isLive && player.duration > 0) {
+                            val delta = if (point.x < size.width / 2) -10_000L else 10_000L
+                            player.seekTo(
+                                (player.currentPosition + delta)
+                                    .coerceIn(0L, player.duration),
+                            )
+                        }
+                    },
+                )
+            },
     ) {
         if (streamUrl != null) {
             AndroidView(
                 factory = {
+                    Diag.i("PlayerView creada (factoría de AndroidView)")
                     PlayerView(it).apply {
                         useController = false
                         resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
@@ -499,28 +669,30 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
                 update = { it.player = player },
                 modifier = Modifier.fillMaxSize(),
             )
-            // Capa transparente por encima de la SurfaceView: un toque alterna los
-            // controles y un doble toque salta ±10 s. Sin ella, la vista nativa
-            // consume los gestos y el reproductor parece no responder.
-            Box(
-                Modifier
-                    .fillMaxSize()
-                    .pointerInput(player, isLive) {
-                        detectTapGestures(
-                            onTap = { controlsVisible = !controlsVisible; interactionTick++ },
-                            onDoubleTap = { point ->
-                                touchControls()
-                                if (!isLive && player.duration > 0) {
-                                    val delta = if (point.x < size.width / 2) -10_000L else 10_000L
-                                    player.seekTo(
-                                        (player.currentPosition + delta)
-                                            .coerceIn(0L, player.duration),
-                                    )
-                                }
-                            },
-                        )
-                    },
-            )
+            DisposableEffect(playerView) {
+                val superficie = playerView?.videoSurfaceView as? SurfaceView
+                val escucha = object : SurfaceHolder.Callback {
+                    override fun surfaceCreated(holder: SurfaceHolder) {
+                        Diag.i("Superficie creada: ${holder.surface}")
+                    }
+
+                    override fun surfaceChanged(
+                        holder: SurfaceHolder,
+                        format: Int,
+                        width: Int,
+                        height: Int,
+                    ) {
+                        Diag.i("Superficie cambiada: formato=$format ${width}x$height")
+                    }
+
+                    override fun surfaceDestroyed(holder: SurfaceHolder) {
+                        Diag.w("Superficie destruida")
+                    }
+                }
+                superficie?.holder?.addCallback(escucha)
+                onDispose { superficie?.holder?.removeCallback(escucha) }
+            }
+
         } else if (resolviendo) {
             Column(
                 Modifier.align(Alignment.Center),
@@ -571,7 +743,11 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                Spacer(Modifier.height(10.dp))
+                Spacer(Modifier.height(14.dp))
+                androidx.compose.material3.OutlinedButton(onClick = { reintentarAhora() }) {
+                    Text("Reintentar")
+                }
+                Spacer(Modifier.height(6.dp))
                 Text(
                     "Atrás para volver",
                     style = MaterialTheme.typography.labelLarge,
@@ -580,15 +756,43 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
             }
         }
 
-        AnimatedVisibility(
-            visible = controlsVisible,
-            enter = fadeIn() + slideInVertically { it / 4 },
-            exit = fadeOut() + slideOutVertically { it / 4 },
-            modifier = Modifier.align(Alignment.BottomStart),
-        ) {
+        // Reintento automático en curso: se avisa sin tapar el vídeo.
+        if (reintentando > 0 && errorMsg == null) {
+            Row(
+                Modifier
+                    .align(Alignment.Center)
+                    .background(Color.Black.copy(alpha = 0.72f), RoundedCornerShape(24.dp))
+                    .padding(horizontal = 18.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                androidx.compose.material3.CircularProgressIndicator(
+                    modifier = Modifier.size(18.dp),
+                    color = MaterialTheme.colorScheme.primary,
+                    strokeWidth = 2.dp,
+                )
+                Spacer(Modifier.size(12.dp))
+                Text(
+                    "Recuperando la conexión… (intento $reintentando)",
+                    color = Color.White,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        }
+
+        // Ojo: con AnimatedVisibility + slideInVertically el panel quedaba pintado unos
+        // 50 dp por encima de su zona táctil, así que los botones «no respondían» (#19).
+        // Ahora sólo se anima la opacidad: dibujo y toques siempre coinciden.
+        val opacidadControles by animateFloatAsState(
+            targetValue = if (controlsVisible) 1f else 0f,
+            animationSpec = tween(220),
+            label = "controles",
+        )
+        if (controlsVisible || opacidadControles > 0.01f) {
             Column(
                 Modifier
+                    .align(Alignment.BottomStart)
                     .fillMaxWidth()
+                    .graphicsLayer { alpha = opacidadControles }
                     .background(Brush.verticalGradient(listOf(Color(0xE6100B19), Color(0xFF100B19))))
                     .navigationBarsPadding()
                     .padding(horizontal = 16.dp, vertical = 10.dp),
@@ -879,4 +1083,158 @@ private fun PlayerSettingsDialog(
             androidx.compose.material3.TextButton(onClick = onDismiss) { Text("Cerrar") }
         },
     )
+}
+
+private fun nombreEstado(estado: Int): String = when (estado) {
+    Player.STATE_IDLE -> "IDLE"
+    Player.STATE_BUFFERING -> "BUFFERING"
+    Player.STATE_READY -> "READY"
+    Player.STATE_ENDED -> "ENDED"
+    else -> "DESCONOCIDO($estado)"
+}
+
+/**
+ * Traza de Media3: decodificador elegido, cargas de red, descartes y errores.
+ * Escribe solo con el diagnóstico activo; en producción no genera ruido.
+ */
+private class DiagnosticoListener : AnalyticsListener {
+    @Volatile var decodificador: String? = null
+    @Volatile var descargados: Long = 0L
+    @Volatile var descartados: Int = 0
+    @Volatile var underruns: Int = 0
+    @Volatile var ultimaTasaBps: Long = 0L
+
+    override fun onVideoDecoderInitialized(
+        eventTime: AnalyticsListener.EventTime,
+        decoderName: String,
+        initializedTimestampMs: Long,
+        initializationDurationMs: Long,
+    ) {
+        decodificador = decoderName
+        Diag.i("Vídeo: decodificador «$decoderName» listo en $initializationDurationMs ms")
+    }
+
+    override fun onVideoInputFormatChanged(
+        eventTime: AnalyticsListener.EventTime,
+        format: Format,
+        decoderReuseEvaluation: DecoderReuseEvaluation?,
+    ) {
+        Diag.i(
+            "Vídeo: formato ${format.width}x${format.height} ${format.sampleMimeType} " +
+                "sar=${format.pixelWidthHeightRatio} fps=${format.frameRate} reutilización=$decoderReuseEvaluation",
+        )
+    }
+
+    override fun onVideoSizeChanged(eventTime: AnalyticsListener.EventTime, videoSize: VideoSize) {
+        Diag.i("Vídeo: tamaño ${videoSize.width}x${videoSize.height} relación=${videoSize.pixelWidthHeightRatio}")
+    }
+
+    override fun onRenderedFirstFrame(
+        eventTime: AnalyticsListener.EventTime,
+        surface: Any,
+        renderedFirstFrameTimestampMs: Long,
+    ) {
+        Diag.i("Vídeo: primer fotograma pintado en $surface a los $renderedFirstFrameTimestampMs ms")
+    }
+
+    override fun onVideoCodecError(eventTime: AnalyticsListener.EventTime, error: Exception) {
+        Diag.w("Vídeo: ERROR del decodificador: ${error.javaClass.simpleName}: ${error.message}", error)
+    }
+
+    override fun onAudioCodecError(eventTime: AnalyticsListener.EventTime, error: Exception) {
+        Diag.w("Audio: ERROR del decodificador: ${error.javaClass.simpleName}: ${error.message}", error)
+    }
+
+    override fun onDroppedVideoFrames(
+        eventTime: AnalyticsListener.EventTime,
+        droppedFrames: Int,
+        elapsedMs: Long,
+    ) {
+        descartados += droppedFrames
+        if (Diag.verboso) Diag.i("Vídeo: +$droppedFrames descartados (total $descartados) en $elapsedMs ms")
+    }
+
+    override fun onAudioDecoderInitialized(
+        eventTime: AnalyticsListener.EventTime,
+        decoderName: String,
+        initializationDurationMs: Long,
+    ) {
+        Diag.i("Audio: decodificador «$decoderName» listo en $initializationDurationMs ms")
+    }
+
+    override fun onAudioUnderrun(
+        eventTime: AnalyticsListener.EventTime,
+        bufferSize: Int,
+        bufferSizeMs: Long,
+        elapsedSinceLastFeedMs: Long,
+    ) {
+        underruns++
+        Diag.w("Audio: underrun #$underruns (búfer=$bufferSize B, $bufferSizeMs ms, espera=$elapsedSinceLastFeedMs ms)")
+    }
+
+    override fun onLoadStarted(
+        eventTime: AnalyticsListener.EventTime,
+        loadEventInfo: LoadEventInfo,
+        mediaLoadData: MediaLoadData,
+    ) {
+        val uri = loadEventInfo.uri
+        Diag.i("Red: abriendo ${uri.host}${uri.path} tipo=${mediaLoadData.trackType}")
+    }
+
+    override fun onLoadCompleted(
+        eventTime: AnalyticsListener.EventTime,
+        loadEventInfo: LoadEventInfo,
+        mediaLoadData: MediaLoadData,
+    ) {
+        val bytes = loadEventInfo.bytesLoaded
+        val ms = loadEventInfo.loadDurationMs.coerceAtLeast(1L)
+        descargados += bytes
+        ultimaTasaBps = bytes * 8000L / ms
+        Diag.i("Red: carga completa $bytes B en $ms ms (${ultimaTasaBps / 1024} KB/s)")
+    }
+
+    override fun onLoadCanceled(
+        eventTime: AnalyticsListener.EventTime,
+        loadEventInfo: LoadEventInfo,
+        mediaLoadData: MediaLoadData,
+    ) {
+        Diag.w("Red: carga cancelada tras ${loadEventInfo.bytesLoaded} B en ${loadEventInfo.loadDurationMs} ms")
+    }
+
+    override fun onLoadError(
+        eventTime: AnalyticsListener.EventTime,
+        loadEventInfo: LoadEventInfo,
+        mediaLoadData: MediaLoadData,
+        error: IOException,
+        wasCanceled: Boolean,
+    ) {
+        Diag.w(
+            "Red: ERROR de carga tras ${loadEventInfo.bytesLoaded} B en ${loadEventInfo.loadDurationMs} ms",
+            error,
+        )
+    }
+
+    override fun onDownstreamFormatChanged(
+        eventTime: AnalyticsListener.EventTime,
+        mediaLoadData: MediaLoadData,
+    ) {
+        val formato = mediaLoadData.trackFormat
+        Diag.i("Pista: tipo=${mediaLoadData.trackType} ${formato?.sampleMimeType} ${formato?.width}x${formato?.height}")
+    }
+
+    override fun onLoadingChanged(eventTime: AnalyticsListener.EventTime, isLoading: Boolean) {
+        Diag.i("Estado: cargando=$isLoading")
+    }
+
+    override fun onPlaybackStateChanged(eventTime: AnalyticsListener.EventTime, playbackState: Int) {
+        Diag.i("Estado: ${nombreEstado(playbackState)} en ${eventTime.currentPlaybackPositionMs} ms")
+    }
+
+    override fun onIsPlayingChanged(eventTime: AnalyticsListener.EventTime, isPlaying: Boolean) {
+        Diag.i("Estado: isPlaying=$isPlaying en ${eventTime.currentPlaybackPositionMs} ms")
+    }
+
+    override fun onPlayerError(eventTime: AnalyticsListener.EventTime, error: PlaybackException) {
+        Diag.w("ERROR de reproducción ${error.errorCodeName}: ${error.message}", error)
+    }
 }
