@@ -57,6 +57,7 @@ IGNORED_PREFIXES = (
 IGNORED_FILES = {
     ".gitignore",
     ".gitattributes",
+    "AGENTS.md",
     "README.md",
     "LICENSE",
     "LICENSE.md",
@@ -156,6 +157,9 @@ def channels_for_paths(paths: list[str]) -> set[str]:
         if not ruta or ruta in IGNORED_FILES:
             continue
         if any(ruta.startswith(prefijo) for prefijo in IGNORED_PREFIXES):
+            continue
+        # Cualquier Markdown en la raíz es documentación, no código de la app.
+        if "/" not in ruta and ruta.lower().endswith((".md", ".markdown")):
             continue
 
         encontrado = False

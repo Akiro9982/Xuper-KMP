@@ -15,7 +15,7 @@ on:
         options: [auto, all, desktop, mobile, tv]
         default: auto
       version:
-        description: "Versión X.Y.Z (vacío = version.properties)"
+        description: "Versión X.Y.Z; debe coincidir con version.properties (vacío = usarla)"
         type: string
         required: false
         default: ""
@@ -38,6 +38,17 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Verificar que el tag está sobre el HEAD de main
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          ACTUAL=$(git rev-parse HEAD)
+          MAIN=$(git rev-parse FETCH_HEAD)
+          if [ "$ACTUAL" != "$MAIN" ]; then
+            echo "::error::El commit $ACTUAL no es el HEAD actual de main ($MAIN). Crea el tag sobre el último commit de main."
+            exit 1
+          fi
+
       - name: Calcular versión y canales
         id: meta
         env:
@@ -50,6 +61,7 @@ jobs:
             --tag "$TAG" \
             --channel "$INPUT_CHANNEL" \
             --version "$INPUT_VERSION" \
+            --strict-channel \
             --json-out release-meta.json >/dev/null
 
           VERSION=$(jq -r '.version' release-meta.json)
@@ -57,12 +69,10 @@ jobs:
           HEAD=$(jq -r '.head' release-meta.json)
           CHANNELS=$(jq -c '.channels' release-meta.json)
 
-          if [ -n "$TAG" ]; then
-            PROPS=$(python3 -c "import sys; sys.path.insert(0, 'scripts'); from release_lib import version_from_properties; print(version_from_properties())")
-            if [ "$PROPS" != "$VERSION" ]; then
-              echo "::error::El tag $TAG indica $VERSION, pero version.properties dice $PROPS. Sube la versión antes de etiquetar."
-              exit 1
-            fi
+          PROPS=$(python3 -c "import sys; sys.path.insert(0, 'scripts'); from release_lib import version_from_properties; print(version_from_properties())")
+          if [ "$PROPS" != "$VERSION" ]; then
+            echo "::error::La release indica $VERSION, pero version.properties dice $PROPS. Sube version.properties antes de etiquetar o ejecutar."
+            exit 1
           fi
 
           mkdir -p release-notes
@@ -247,6 +257,10 @@ jobs:
       (needs.build-desktop.result == 'success' || needs.build-desktop.result == 'skipped') &&
       (needs.build-android.result == 'success' || needs.build-desktop.result == 'success')
     runs-on: ubuntu-latest
+    environment: release
+    concurrency:
+      group: release-publish
+      cancel-in-progress: false
     permissions:
       contents: write
     steps:
@@ -286,17 +300,22 @@ jobs:
             test -f "$NOTES" || { echo "::error::Falta $NOTES"; exit 1; }
 
             if gh release view "$TAG" >/dev/null 2>&1; then
-              gh release edit "$TAG" --title "$TITLE" --notes-file "$NOTES" --draft=false --latest=false
+              IS_DRAFT=$(gh release view "$TAG" --json isDraft --jq '.isDraft')
+              if [ "$IS_DRAFT" != "true" ]; then
+                echo "::error::La release $TAG ya está publicada. No se modifica; sube la versión."
+                exit 1
+              fi
+              gh release edit "$TAG" --title "$TITLE" --notes-file "$NOTES" --latest=false
             else
-              gh release create "$TAG" --title "$TITLE" --notes-file "$NOTES" \
-                --target "$HEAD_SHA" --latest=false
+              gh release create "$TAG" --title "$TITLE" --notes-file "$NOTES" --draft --target "$HEAD_SHA" --latest=false
             fi
 
             shopt -s nullglob
             FILES=(dist/xuper-${CH}-${VERSION}.*)
-            if [ ${#FILES[@]} -eq 0 ]; then
-              echo "::error::No hay artefactos para $CH"
+            if [ ${#FILES[@]} -ne 2 ]; then
+              echo "::error::Se esperaban el artefacto y su SHA-256 para $CH, pero hay ${#FILES[@]} archivo(s)."
               exit 1
             fi
             gh release upload "$TAG" "${FILES[@]}" --clobber
+            gh release edit "$TAG" --draft=false --latest=false
           done

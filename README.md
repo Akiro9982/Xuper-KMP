@@ -252,10 +252,10 @@ ni listas de canales.
 ## Estado del proyecto
 
 El núcleo, las tres aplicaciones y la reproducción están terminados y validados contra el portal
-real. Queda por delante la optimización para dispositivos muy limitados y configurar los secretos
-de firma de Android en GitHub para que el workflow de release publique APK actualizables. El
-empaquetado de Windows ya genera un MSI por usuario; falta pulir la dependencia de mpv en equipos
-sin una copia local.
+real. Queda por delante la optimización para dispositivos muy limitados. El flujo de release por
+canal ya está configurado, los secretos de firma de Android están en GitHub y la primera versión
+0.2.0 ya se publicó. El empaquetado de Windows ya genera un MSI por usuario; falta pulir la
+dependencia de mpv en equipos sin una copia local.
 
 ---
 

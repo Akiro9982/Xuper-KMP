@@ -35,6 +35,11 @@ def main() -> int:
     parser.add_argument("--version", default="", help="Versión manual X.Y.Z")
     parser.add_argument("--base", default="", help="Tag/commit base; por defecto el tag anterior")
     parser.add_argument("--head", default="HEAD", help="Commit de destino")
+    parser.add_argument(
+        "--strict-channel",
+        action="store_true",
+        help="Exige que un tag de canal coincida con las rutas modificadas",
+    )
     parser.add_argument("--json-out", default="", help="Archivo JSON de salida")
     args = parser.parse_args()
 
@@ -53,6 +58,20 @@ def main() -> int:
             head = tag
             base = args.base.strip() or previous_tag(tag)
             if info.channel:
+                if args.strict_channel:
+                    canales = channels_for_paths(changed_paths(base, head))
+                    if not canales:
+                        raise ReleaseError(
+                            f"No hay cambios de código entre {base or 'el inicio'} y {tag}. "
+                            "No se publica nada para evitar releases vacíos."
+                        )
+                    if info.channel not in canales:
+                        afectados = ", ".join(c for c in ALL_CHANNELS if c in canales)
+                        raise ReleaseError(
+                            f"El tag {tag} fuerza el canal {info.channel}, pero los archivos "
+                            f"modificados afectan a: {afectados}. Usa un tag vX.Y.Z o corrige "
+                            "los cambios antes de etiquetar."
+                        )
                 channels = [info.channel]
             else:
                 canales = channels_for_paths(changed_paths(base, head))
@@ -75,8 +94,13 @@ def main() -> int:
                 channels = list(ALL_CHANNELS)
             else:
                 canales = channels_for_paths(changed_paths(base, head))
-                # Un release manual sin diferencias sirve para republicar; se hace completo.
-                channels = [c for c in ALL_CHANNELS if c in canales] or list(ALL_CHANNELS)
+                if not canales:
+                    raise ReleaseError(
+                        f"No hay cambios de código entre {base or 'el inicio'} y {head}. "
+                        "Usa channel=all o un canal explícito solo si de verdad quieres "
+                        "republicar; no se publica una release vacía por accidente."
+                    )
+                channels = [c for c in ALL_CHANNELS if c in canales]
             source = "manual"
 
         resultado = {

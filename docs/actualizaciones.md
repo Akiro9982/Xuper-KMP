@@ -7,6 +7,8 @@ No hay servidores intermedios ni telemetría.
 
 Repositorio: <https://github.com/Akiro9982/Xuper-KMP>
 
+> Guía operativa para agentes de IA: [`AGENTS.md`](../AGENTS.md).
+
 ---
 
 ## Canales
@@ -36,7 +38,7 @@ canales afectados.
 | `desktop/` | Escritorio |
 | `core/` | Los tres |
 | `gradle/`, `build.gradle.kts`, `settings.gradle.kts`, `gradle.properties` | Los tres |
-| `docs/`, `.github/`, `scripts/`, `README.md`, `version.properties` | Ninguno |
+| `docs/`, `.github/`, `scripts/`, Markdown de la raíz (`README.md`, `AGENTS.md`, etc.), `version.properties` | Ninguno |
 
 Cualquier ruta de código no reconocida se considera global por seguridad: es mejor
 avisar de más que dejar una app sin un arreglo importante.
@@ -96,35 +98,41 @@ tocarlo a mano.
 ```bash
 git add version.properties
 git commit -m "[UPDATE]: Prepara la versión 0.2.1"
-git push
+git push origin main
+# espera a que CI de main termine en verde
 git tag v0.2.1
 git push origin v0.2.1
 ```
 
-La etiqueta debe coincidir con `version.properties`. Si no coincide, el workflow
-falla antes de compilar para evitar releases con la versión equivocada. Si es la
-primera release y no hay una etiqueta anterior, se publican los tres canales.
+La etiqueta debe coincidir con `version.properties` y apuntar al **último commit
+de `main`**. Si no coincide, el workflow falla antes de compilar para evitar
+releases con la versión equivocada o con código antiguo. Si es la primera release
+y no hay una etiqueta anterior, se publican los tres canales.
 
 Opciones:
 
 - `vX.Y.Z`: publica solo los canales afectados por las rutas cambiadas.
-- `mobile-vX.Y.Z`: fuerza **solo Android**. Úsalo cuando el cambio sea
-  exclusivamente móvil aunque hayas tocado `core/` de forma compatible.
-- `tv-vX.Y.Z`: fuerza **solo Android TV**.
-- `desktop-vX.Y.Z`: fuerza **solo escritorio**.
+- `mobile-vX.Y.Z`: fuerza **solo Android**, pero exige que `app-mobile/` o
+  `core/` haya cambiado. Si el cambio solo afecta a TV, este tag falla.
+- `tv-vX.Y.Z`: fuerza **solo Android TV**, con la misma comprobación.
+- `desktop-vX.Y.Z`: fuerza **solo escritorio**, con la misma comprobación.
 
 Las etiquetas de canal se pueden empujar por separado, por ejemplo para corregir
-solo el APK de Android TV sin volver a publicar escritorio.
+solo el APK de Android TV sin volver a publicar escritorio. El workflow manual
+(`Run workflow`) permite forzar un canal sin esa comprobación; úsalo solo con
+revisión y cuando sepas que el cambio no afecta a las demás apps.
 
 ### 3. Ejecución manual
 
 En **Actions → Release → Run workflow** se puede elegir:
 
-- `channel = auto`: calcula canales por rutas desde la etiqueta anterior.
-- `channel = all`: publica los tres canales.
-- `channel = desktop`, `mobile` o `tv`: fuerza uno.
+- `channel = auto`: calcula canales por rutas desde la etiqueta anterior. Si no
+  hay cambios de código, falla; no publica una release vacía.
+- `channel = all`: publica los tres canales (solo si de verdad quieres
+  republicar).
+- `channel = desktop`, `mobile` o `tv`: fuerza uno; úsalo con revisión.
 - `version`: vacío usa `version.properties`; si se indica, debe tener formato
-  `X.Y.Z`.
+  `X.Y.Z` y coincidir con `version.properties`.
 
 ---
 
@@ -143,12 +151,13 @@ En **Actions → Release → Run workflow** se puede elegir:
    - `xuper-tv-X.Y.Z.apk`
    - `xuper-desktop-X.Y.Z.msi`
    - cada uno con su `.sha256`.
-6. Crea o actualiza un release **por canal** (`mobile-vX.Y.Z`, etc.) y sube sus
-   archivos.
+6. Crea un **draft** por canal (`mobile-vX.Y.Z`, etc.), sube sus archivos y
+   solo entonces lo publica.
 
 El release de cada canal contiene solo su artefacto. La app filtra por etiqueta y
 por extensión, así que nunca descarga el MSI desde Android ni el APK desde
-escritorio.
+escritorio. Una release ya publicada no se modifica: si hay que corregir algo, se
+sube la versión y se publica una etiqueta nueva.
 
 ---
 
@@ -279,7 +288,8 @@ adelante sin cambiar el cliente.
 Para validar los scripts de release sin publicar:
 
 ```bash
-python scripts/affected_channels.py --channel auto --version 0.2.1
+# Fuerza todos los canales; no exige cambios desde el último tag
+python scripts/affected_channels.py --channel all --version 0.2.1
 python scripts/release_notes.py --version 0.2.1 --channel mobile
 ```
 
@@ -310,9 +320,66 @@ Estás ejecutando desde el IDE o con `gradlew run`. Compila e instala el MSI.
 Revisa `%LOCALAPPDATA%\Xuper\updates\install.log`; suele ser un archivo bloqueado
 por una instancia anterior, antivirus o una instalación en curso.
 
+**El workflow falla porque el tag no está en el último commit de `main`.**
+El workflow exige que el commit etiquetado sea el HEAD actual de `main`. Si
+`main` avanzó después de crear el tag, crea uno nuevo sobre el HEAD actual; no
+muevas el tag anterior. Si el tag ya tiene release, sube la versión.
+
+**El workflow falla porque el tag no coincide con las rutas.**
+Un tag `mobile-v...` solo es válido si el cambio afecta a `app-mobile/` o a
+`core/`. Usa el tag global `vX.Y.Z` o corrige el tag; no lo fuerces con
+`git push --force`.
+
 **El workflow falla en «Calcular versión y canales».**
 La etiqueta no coincide con `version.properties`, no hay cambios de código o el
-tag no tiene un formato válido. Corrige y vuelve a empujar la etiqueta.
+tag no tiene un formato válido. Si el run falló antes de `publish` y todavía no
+existe ninguna release, corrige en un commit nuevo y recrea la etiqueta solo tras
+comprobar que no hay release ni assets publicados. Si la release ya existe, sube
+la versión y publica una etiqueta nueva. No muevas una etiqueta publicada ni uses
+`git push --force` sobre etiquetas.
+
+---
+
+## Protecciones de GitHub
+
+El workflow ya valida la versión, el canal, el commit y la inmutabilidad del
+release. Para cerrar el resto hace falta configurar reglas en GitHub, porque un
+agente con permiso de escritura podría intentar mover una etiqueta o reescribir
+`main`.
+
+### Etiquetas
+
+En **Settings → Rules → Rulesets**, crea un ruleset para tags:
+
+- Target: los patrones `v*`, `mobile-v*`, `tv-v*` y `desktop-v*`.
+- Activa el bloqueo de eliminación y de actualización/force push de etiquetas.
+- No bloquees la creación: el workflow crea las etiquetas de canal.
+- No añadas agentes ni cuentas de automatización a la lista de bypass.
+
+Así una etiqueta publicada no se puede borrar, mover ni reutilizar. Si un
+release falla antes de publicar, primero comprueba que no exista release y
+después recrea la etiqueta; si ya existe, sube la versión.
+
+### Rama main
+
+Crea un ruleset para `main` que bloquee force pushes y la eliminación de la
+rama. Para la garantía máxima, activa también «Require a pull request before
+merging» y revisa los cambios de `.github/workflows/` y `scripts/` antes de
+mergear. Sin esa revisión, un agente podría modificar el propio workflow.
+
+### Entorno de publicación
+
+El job `publish` usa el entorno `release`. Si quieres que ninguna release se
+publique sin aprobación humana, en **Settings → Environments → release** añade
+revisores obligatorios y permite los tags `v*`, `mobile-v*`, `tv-v*` y
+`desktop-v*` en «Deployment branches and tags». Si no lo configuras, el entorno
+no bloquea nada y las releases siguen siendo automáticas.
+
+Si GitHub ofrece **release immutability** en la configuración del repositorio,
+actívala: impide editar o borrar una release publicada incluso fuera del workflow.
+
+Estas reglas no se pueden aplicar desde el repositorio: son ajustes de GitHub y
+hay que configurarlas una vez. La guía para agentes está en `AGENTS.md`.
 
 ---
 
