@@ -118,7 +118,10 @@ jobs:
 
       - name: Android SDK
         if: env.SELECTED == 'true'
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
+        with:
+          # La v3 instala por defecto el paquete obsoleto `tools`, que Google ya no sirve.
+          packages: platform-tools
 
       - name: Instalar plataforma Android
         if: env.SELECTED == 'true'
