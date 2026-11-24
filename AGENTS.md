@@ -6,8 +6,12 @@ de preparar un release, lee `docs/actualizaciones.md` y esta guía.
 
 ## Reglas que no se negocian
 
-- No commitees `xuper-release.jks`, `keystore.properties`, `keystore.b64` ni
-  contraseñas. Los secretos viven solo en GitHub.
+- No agregues ni dejes en el árbol de trabajo `xuper-release.jks`,
+  `keystore.properties`, `keystore.b64` ni contraseñas. Los secretos viven solo
+  en GitHub.
+- No ejecutes `git add`, `git commit`, `git push`, `git tag` ni `git push
+  --tags`. El agente deja los cambios sin preparar ni commitear; el usuario
+  revisa, decide qué entra, commitea, empuja y etiqueta.
 - No cambies ni regeneres la clave de firma Android. La misma clave debe firmar
   todas las versiones para siempre.
 - No crees releases a mano en GitHub. El workflow `.github/workflows/release.yml`
@@ -61,34 +65,78 @@ Si el tag de canal no coincide con las rutas, el workflow falla antes de compila
 El workflow manual (`workflow_dispatch`) sí puede forzar un canal; úsalo solo con
 revisión y cuando sepas que el cambio no afecta a las demás apps.
 
+## Reparto de responsabilidades
+
+El agente:
+
+- implementa el cambio y actualiza `version.properties` si corresponde;
+- ejecuta las pruebas y comprueba el diff;
+- deja los cambios **sin stage y sin commit** y entrega el resumen para
+  revisión;
+- no ejecuta `git add`, `git commit`, `git push`, `git tag` ni `git push --tags`.
+
+El usuario:
+
+- revisa el diff, decide qué archivos entran y escribe el mensaje de commit;
+- commitea y empuja a `main`;
+- espera a que CI termine en verde;
+- crea y empuja la etiqueta cuando todo esté correcto.
+
+Esto es una norma de trabajo, no una barrera técnica: si el agente tiene
+credenciales con permiso de push, puede saltársela. Para que sea una garantía
+real, el agente debe trabajar sin credenciales de escritura en GitHub.
+
 ## Flujo canónico
 
-1. Actualiza la versión:
+1. El agente actualiza la versión:
 
 ```bash
 python scripts/bump_version.py --patch
 ```
 
-2. Revisa el diff y ejecuta las pruebas que correspondan:
+2. El agente implementa el cambio y ejecuta las pruebas que correspondan:
 
 ```bash
 git diff --check
 ./gradlew :core:jvmTest --tests "com.xuperclean.core.update.*"
 ```
 
-3. Haz commit con un prefijo que el generador entienda:
+3. El agente comprueba el estado y deja el trabajo listo, sin commit:
 
 ```bash
-# Añade solo los archivos del cambio; no uses `git add .` con secretos locales
-git add version.properties
-git add app-mobile app-tv desktop core
+git status --short
+git diff --check
+git diff --stat
+```
+
+En la entrega debe indicar:
+
+- resumen de lo cambiado;
+- archivos modificados;
+- pruebas ejecutadas;
+- mensaje de commit sugerido, con prefijo comprensible para el changelog;
+- que el usuario debe revisar, commitear, empujar y etiquetar.
+
+4. El usuario revisa el diff y hace el commit. Con GitHub Desktop:
+
+   - revisa **Changes**;
+   - escribe el mensaje, por ejemplo `[FIX]: Describe el cambio real`;
+   - pulsa **Commit to main**;
+   - pulsa **Push origin**.
+
+   Si prefiere terminal, el usuario ejecuta:
+
+```bash
+# Añade solo los archivos revisados; no uses `git add .` con secretos locales
+git add version.properties app-mobile app-tv desktop core
 git commit -m "[FIX]: Describe el cambio real"
 git push origin main
 ```
 
-4. Espera a que el CI de `main` termine en verde.
+5. El usuario espera a que el CI de `main` termine en verde.
 
-5. Crea la etiqueta en el commit de `main` que acabas de empujar:
+6. El usuario crea y empuja la etiqueta en el commit de `main` que acaba de
+   empujar:
 
 ```bash
 # Solo móvil
@@ -100,9 +148,9 @@ git tag vX.Y.Z
 git push origin vX.Y.Z
 ```
 
-6. Sigue el workflow **Release** en GitHub Actions. No vuelvas a ejecutar el run
-   antiguo si el workflow cambió: el run antiguo usa el commit y el workflow
-   antiguos.
+7. El usuario sigue el workflow **Release** en GitHub Actions. No vuelvas a
+   ejecutar el run antiguo si el workflow cambió: el run antiguo usa el commit y
+   el workflow antiguos.
 
 ## Cuándo usar etiqueta global y cuándo forzar el canal
 
@@ -123,9 +171,9 @@ coincidir exactamente con `version.properties`. El workflow compara el commit
 del tag con `origin/main` y falla si no son el mismo.
 
 - Si el workflow falla **antes** de `publish` y todavía no existe ninguna release
-  para esa etiqueta, corrige en un commit nuevo, sube la versión y crea una
-  etiqueta nueva. Con la protección de tags activada no se puede borrar ni
-  recrear la etiqueta vieja; no lo intentes.
+  para esa etiqueta, el agente prepara la corrección y el usuario la commitea y
+  empuja con una versión nueva. Con la protección de tags activada no se puede
+  borrar ni recrear la etiqueta vieja; no lo intentes.
 - Si la release ya existe, no muevas la etiqueta: sube la versión (por ejemplo,
   `0.2.0` -> `0.2.1`) y publica una etiqueta nueva. El workflow ya no edita
   releases publicadas: solo crea un draft, sube los assets y lo publica.
@@ -144,9 +192,10 @@ versión.
 ## Protecciones que deben configurarse en GitHub
 
 Estas reglas no viven en el repositorio; se configuran en GitHub y son las que
-impiden que un agente con permisos de escritura mueva una etiqueta o reescriba
-`main`. El agente debe usar una cuenta con permiso **Write**, nunca **Admin**: un
-administrador puede cambiar las reglas y saltarse estas barreras.
+impiden que una cuenta con permisos de escritura mueva una etiqueta o reescriba
+`main`. La garantía principal es que el agente trabaje **sin credenciales de
+push**; las rulesets son defensa adicional. No compartas con el agente una cuenta
+**Admin**: un administrador puede cambiar las reglas y saltarse estas barreras.
 
 ### Etiquetas
 
@@ -167,8 +216,8 @@ intentes borrar ni recrear la etiqueta protegida.
 Crea un ruleset para `main` que bloquee force pushes y eliminación de la rama.
 Si quieres la garantía máxima, activa también «Require a pull request before
 merging» y revisa los cambios de `.github/workflows/` y `scripts/` antes de
-mergear. Eso impide que un agente modifique el propio sistema de release sin
-revisión.
+mergear. Eso impide que una automatización con permiso de push modifique el
+propio sistema de release sin revisión.
 
 ### Entorno de publicación
 
@@ -193,13 +242,15 @@ No los imprimas, no los pegues en un commit y no los cambies sin confirmar que
 es la misma clave que firma la app instalada. Si faltan, el workflow falla a
 propósito antes de publicar un APK con la clave de depuración.
 
-## Verificación final
+## Verificación final (usuario)
 
-- `git status` limpio antes de etiquetar.
+- El agente no dejó commits, tags ni cambios preparados en el índice.
+- Revisó el diff y no hay secretos ni archivos inesperados.
+- Hizo el commit y el push; CI de `main` en verde.
 - `version.properties` coincide con la etiqueta.
-- CI de `main` en verde.
 - El run **Release** terminó en verde y creó solo los canales esperados.
 - Cada release tiene su APK/MSI y su `.sha256`.
 
-Si algo no coincide, detente y reporta el error; no improvises un release
-manual ni muevas una etiqueta publicada.
+Si algo no coincide, el agente puede diagnosticar y preparar el arreglo; el
+usuario decide y publica. No improvises un release manual ni muevas una etiqueta
+publicada.

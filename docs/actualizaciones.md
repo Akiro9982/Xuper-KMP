@@ -8,6 +8,10 @@ No hay servidores intermedios ni telemetría.
 Repositorio: <https://github.com/Akiro9982/Xuper-KMP>
 
 > Guía operativa para agentes de IA: [`AGENTS.md`](../AGENTS.md).
+>
+> **Reparto de responsabilidades:** el agente implementa, actualiza la versión,
+> prueba y deja el árbol listo. El usuario revisa, commitea, empuja y etiqueta.
+> El agente no ejecuta `git add`, `git commit`, `git push` ni `git tag`.
 
 ---
 
@@ -93,16 +97,25 @@ major * 1_000_000 + minor * 1_000 + patch
 Por eso `0.2.0` produce `2000` y siempre crece al subir la versión. No hay que
 tocarlo a mano.
 
-### 2. Etiquetar
+### 2. Revisar, commitear y etiquetar (usuario)
+
+El agente deja los cambios sin commit. El usuario revisa el diff y ejecuta estos
+comandos, o usa GitHub Desktop:
 
 ```bash
-git add version.properties
+# Añade solo los archivos revisados; no uses `git add .` con secretos locales
+git add version.properties app-mobile app-tv desktop core
 git commit -m "[UPDATE]: Prepara la versión 0.2.1"
 git push origin main
 # espera a que CI de main termine en verde
 git tag v0.2.1
 git push origin v0.2.1
 ```
+
+Con GitHub Desktop: revisa **Changes**, escribe el mensaje, pulsa **Commit to
+main** y luego **Push origin**. La etiqueta se crea después de que CI esté verde.
+
+Estos comandos los ejecuta el usuario, no el agente.
 
 La etiqueta debe coincidir con `version.properties` y apuntar al **último commit
 de `main`**. Si no coincide, el workflow falla antes de compilar para evitar
@@ -333,19 +346,20 @@ Un tag `mobile-v...` solo es válido si el cambio afecta a `app-mobile/` o a
 **El workflow falla en «Calcular versión y canales».**
 La etiqueta no coincide con `version.properties`, no hay cambios de código o el
 tag no tiene un formato válido. Si el run falló antes de `publish` y todavía no
-existe ninguna release, corrige en un commit nuevo, sube la versión y crea una
-etiqueta nueva. Con la protección de tags activada no se puede borrar ni recrear
-la etiqueta vieja. Si la release ya existe, sube la versión y publica una etiqueta
-nueva. No muevas una etiqueta publicada ni uses `git push --force` sobre etiquetas.
+existe ninguna release, el agente prepara la corrección y el usuario la commitea
+y empuja con una versión nueva; después crea una etiqueta nueva. Con la protección
+de tags activada no se puede borrar ni recrear la etiqueta vieja. Si la release ya
+existe, sube la versión y publica una etiqueta nueva. No muevas una etiqueta
+publicada ni uses `git push --force` sobre etiquetas.
 
 ---
 
 ## Protecciones de GitHub
 
 El workflow ya valida la versión, el canal, el commit y la inmutabilidad del
-release. Para cerrar el resto hace falta configurar reglas en GitHub, porque un
-agente con permiso de escritura podría intentar mover una etiqueta o reescribir
-`main`.
+release. Para cerrar el resto hace falta configurar reglas en GitHub, porque una
+cuenta con permiso de escritura o una automatización con credenciales podría
+intentar mover una etiqueta o reescribir `main`.
 
 ### Etiquetas
 
@@ -365,7 +379,8 @@ y crea una etiqueta nueva; no intentes borrar ni recrear la etiqueta protegida.
 Crea un ruleset para `main` que bloquee force pushes y la eliminación de la
 rama. Para la garantía máxima, activa también «Require a pull request before
 merging» y revisa los cambios de `.github/workflows/` y `scripts/` antes de
-mergear. Sin esa revisión, un agente podría modificar el propio workflow.
+mergear. Sin esa revisión, una cuenta con permiso de push podría modificar el
+propio workflow.
 
 ### Entorno de publicación
 
@@ -379,9 +394,10 @@ Si GitHub ofrece **release immutability** en la configuración del repositorio,
 actívala: impide editar o borrar una release publicada incluso fuera del workflow.
 
 Estas reglas no se pueden aplicar desde el repositorio: son ajustes de GitHub y
-hay que configurarlas una vez. Para que sirvan, un agente debe usar una cuenta con
-permiso **Write**, nunca **Admin**; un administrador puede cambiar las reglas.
-La guía para agentes está en `AGENTS.md`.
+hay que configurarlas una vez. La garantía principal es que el agente trabaje sin
+credenciales de push; las rulesets son defensa adicional. No compartas con el
+agente una cuenta **Admin**: un administrador puede cambiar las reglas. La guía
+para agentes está en `AGENTS.md`.
 
 ---
 
