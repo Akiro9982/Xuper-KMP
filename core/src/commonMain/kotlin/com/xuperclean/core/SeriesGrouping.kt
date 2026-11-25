@@ -50,9 +50,30 @@ public object SeriesGrouping {
         }
     }.replace(Regex("""\s+"""), " ").trim()
 
+    /**
+     * Temporada deducida del nombre del capítulo: `… T2_1`, `… Temp.2_01`,
+     * `… Season 2 - 1`. El portal no siempre pone la temporada en el nombre del
+     * asset (la copia original de *Star vs. the Forces of Evil* se llama sin
+     * sufijo), pero el capítulo sí la lleva. Devuelve null si no hay pista.
+     */
+    private val TemporadaEpisodio = Regex(
+        """(?:^|[^a-z0-9])(?:temporada|temp\.?|season|t|s)\s*(\d{1,2})\s*[-_ ]?\s*e?\d{1,3}$""",
+        RegexOption.IGNORE_CASE,
+    )
+
+    /** Número de temporada del nombre, o null si no lleva sufijo. */
+    public fun seasonOrNull(title: String): Int? =
+        Temporada.find(normalize(title))?.groupValues?.get(1)?.toIntOrNull()
+
     /** Número de temporada del nombre; 1 si no lleva sufijo. */
-    public fun seasonNumber(title: String): Int =
-        Temporada.find(normalize(title))?.groupValues?.get(1)?.toIntOrNull() ?: 1
+    public fun seasonNumber(title: String): Int = seasonOrNull(title) ?: 1
+
+    /** Temporada que indica el nombre del capítulo, o null si no la indica. */
+    public fun seasonFromEpisode(title: String?): Int? {
+        val limpio = title?.takeIf { it.isNotBlank() } ?: return null
+        val numero = TemporadaEpisodio.find(normalize(limpio))?.groupValues?.get(1)?.toIntOrNull()
+        return numero?.takeIf { it in 1..99 }
+    }
 
     /**
      * Título base: quita el sufijo de temporada y normaliza.
@@ -72,6 +93,15 @@ public object SeriesGrouping {
         val limpio = title.trim()
         val match = TemporadaOriginal.find(limpio) ?: return limpio
         return limpio.substring(0, match.range.first).trim().ifEmpty { limpio }
+    }
+
+    /**
+     * Título doblado: el nombre no coincide con el alias (que es el título original).
+     * `Star vs. las fuerzas del mal T1` → true · `Star vs. the Forces of Evil Temp.1` → false.
+     */
+    public fun isLocalized(asset: VodAsset): Boolean {
+        val alias = asset.alias?.takeIf { it.isNotBlank() } ?: return false
+        return baseName(asset.name) != baseName(alias)
     }
 
     /**
@@ -103,12 +133,21 @@ public object SeriesGrouping {
         }
 
         return porRaiz.map { (_, grupo) ->
-            val temporadas = grupo
-                .map { SeasonEntry(asset = it, number = seasonNumber(it.name)) }
-                // Dos variantes pueden publicar la misma temporada (T2 duplicada): se
-                // conserva la primera, que ya viene ordenada por el portal.
+            // El portal publica la MISMA temporada dos veces: una con el nombre original
+            // y otra con el ya doblado. Se conservan todas, pero el nombre visible es el
+            // doblado (la app está en español); el resto son copias que la ficha fusiona
+            // para quedarse con los episodios y las pistas de audio de cada una.
+            val porTemporada = grupo.groupBy { seasonNumber(it.name) }
+            val temporadas = porTemporada
+                .map { (numero, assets) ->
+                    val ordenadas = assets.sortedByDescending { isLocalized(it) }
+                    SeasonEntry(
+                        asset = ordenadas.first(),
+                        number = numero,
+                        variantes = ordenadas.drop(1),
+                    )
+                }
                 .sortedBy { it.number }
-                .distinctBy { it.number }
             SeriesGroup(
                 baseName = baseName(grupo.first().name),
                 seasons = temporadas,
@@ -128,9 +167,14 @@ public object SeriesGrouping {
         if (unicos.isEmpty()) return emptyList()
 
         val grupos = group(unicos)
+        // Cada copia (la principal y sus variantes) apunta a su grupo: el portal devuelve
+        // los assets sueltos y cualquiera de ellos debe resolver a la misma ficha.
         val grupoPorId = HashMap<String, SeriesGroup>(unicos.size)
         grupos.forEach { grupo ->
-            grupo.seasons.forEach { grupoPorId[it.asset.contentId] = grupo }
+            grupo.seasons.forEach { temporada ->
+                grupoPorId[temporada.asset.contentId] = grupo
+                temporada.variantes.forEach { grupoPorId[it.contentId] = grupo }
+            }
         }
 
         val devueltos = HashSet<String>()
@@ -174,10 +218,18 @@ public data class SearchResult(
         get() = if (title == asset.name) asset else asset.copy(name = title)
 }
 
-/** Una temporada dentro de una serie. */
+/**
+ * Una temporada dentro de una serie.
+ *
+ * [asset] es la copia que da nombre a la temporada (la doblada, si existe). [variantes]
+ * son las demás copias que el portal publica de esa misma temporada: distinto nombre y
+ * distinto doblaje. No se muestran por separado: la ficha las fusiona con [SeasonMerge]
+ * para quedarse con todos los episodios y todas las pistas de audio.
+ */
 public data class SeasonEntry(
     val asset: VodAsset,
     val number: Int,
+    val variantes: List<VodAsset> = emptyList(),
 ) {
     public val label: String get() = "T$number"
 }

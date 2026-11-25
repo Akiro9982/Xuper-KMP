@@ -180,8 +180,21 @@ según pistas reales del contenedor (Media3/mpv).
 
 ## 8 · Continuar viendo
 
-No existe persistencia de progreso. Requiere almacenamiento local por dispositivo
-(no hay cuentas ni servidor). Pendiente de implementación.
+Implementado como historial **local por dispositivo** (SharedPreferences en Android/TV,
+preferencias de Java en Windows). Una serie guarda el episodio concreto y reanuda ese
+capítulo.
+
+**Identidad de la ficha:** cada temporada se publica como un asset independiente y con su
+propio título (a veces sin sufijo de temporada: la copia original de *Star vs. the Forces
+of Evil* se llama así, sin «Season 2»). Por eso la tarjeta no deduce nada del nombre del
+asset:
+
+- la temporada y el nombre visible viajan en el payload del reproductor, tomados de la
+  ficha (`SeasonEntry.number`, título de la entrada que contiene el capítulo);
+- el historial guarda además el **alias** del portal como clave de serie, de modo que el
+  doblaje y el original comparten una sola tarjeta;
+- al leer, se normaliza lo guardado por versiones anteriores (sufijo «T2»/«Season 2» fuera
+  y temporada deducida del nombre del capítulo) y se descartan tarjetas repetidas.
 
 ---
 
@@ -476,3 +489,25 @@ reproductor puede elegir por idioma.
 - Móvil y TV aplican setPreferredAudioLanguages(lat, spa) con Media3 al preparar y al cambiar de
   pista; escritorio pasa --alang a mpv y lo cambia en caliente con aid=auto.
 - La preferencia se persiste en el dispositivo (audio_language); el directo no la usa.
+### Audio por pista real y decodificador siempre a la vista (0.2.3)
+
+El 15.9 anterior se quedó corto: con dos pistas `spa` (latino y castellano) elegir por idioma
+no decide nada. Media3 las ve iguales y desempata por calidad, así que en algunas series sonaba
+castellano aunque la preferencia fuera latino. La app original no elige «la mejor»: parte el
+`audioInfo` por comas y reproduce la pista cuya posición es `selectAudio` (0 por defecto).
+
+- El extractor de TS publica **un grupo por PID de audio** (grupos de un solo índice), así que
+  hay que recorrer todos los grupos de `player.currentTracks`; mirar solo el primero devolvía
+  una pista y la sección Audio desaparecía (fallo de 0.2.3, corregido en 0.2.4).
+- El reproductor móvil lee esas pistas reales y las etiqueta por posición con los códigos del
+  `audioInfo` (`spa,spa,eng` -> Español, Español 2, Inglés).
+- Si el aparato solo deja ver una pista, se cae al selector por idioma del `audioInfo`: la
+  sección Audio nunca se oculta.
+- La pista se fija con `TrackSelectionOverride` por **índice**, no por idioma; por defecto la
+  del código preferido (`lat`, si no la primera `spa`, si no la primera pista).
+- La elección manual se guarda por título (`audio_index_<contentId>`) y se reaplica al cambiar
+  de CDN: el selector ahora sí ofrece las dos pistas en español, antes se deduplicaban.
+- Ajustes de reproducción: la sección «Vídeo» (Automático/Hardware/Software + copiar informe)
+  va **primero**, para que exista en cualquier contenido y desde cualquier entrada —antes, con
+  subtítulos y audio, quedaba por debajo del pliegue y no se veía—. El aviso «Ajustando la
+  imagen…» también abre los ajustes al tocarlo.

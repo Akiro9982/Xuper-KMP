@@ -95,8 +95,23 @@ sealed interface PlayerPayload {    val title: String
     data class Episode(
         val asset: VodAsset,
         val episode: com.xuperclean.core.model.EpisodeInfo,
-    ) : PlayerPayload {
-        override val title: String get() = episode.name ?: asset.name
+        /** Nombre visible de la serie; el episodio puede venir de una copia con otro título. */
+        val tituloSerie: String? = null,
+        /** Temporada según la ficha; el asset de la copia no siempre la lleva en el nombre. */
+        val temporada: Int? = null,
+        /** Título original de la serie: una sola tarjeta en «Continuar viendo». */
+        val serieKey: String? = null,
+) : PlayerPayload {
+        override val title: String
+            get() = buildString {
+                append(tituloSerie ?: com.xuperclean.core.SeriesGrouping.searchTitle(asset.name))
+                append(" · T")
+                append(
+                    temporada
+                        ?: com.xuperclean.core.SeriesGrouping.seasonNumber(asset.name),
+                )
+                episode.seriesNumber?.takeIf { it > 0 }?.let { append(" · E").append(it) }
+            }
     }
 }
 
@@ -130,6 +145,22 @@ fun PlayerScreen(
     var idiomaAudio by remember(payload) {
         mutableStateOf(com.xuperclean.desktop.data.DesktopWatchStore.audioLanguage)
     }
+    // Pistas reales que publica mpv (en el orden del contenedor) y códigos ISO del
+    // portal (`audioInfo`). El contenedor etiqueta igual las dos pistas `spa`, así que
+    // la posición es lo único que distingue latino de castellano.
+    var pistasMpv by remember(payload) {
+        mutableStateOf<List<com.xuperclean.desktop.player.MpvAudioTrack>>(emptyList())
+    }
+    var codigosAudio by remember(payload) { mutableStateOf<List<String>>(emptyList()) }
+    // Pista elegida a mano (-1 = automática), recordada por título.
+    var audioElegido by remember(payload) { mutableIntStateOf(-1) }
+    val idContenido = remember(payload) {
+        when (val k = payload) {
+            is PlayerPayload.Vod -> k.asset.contentId
+            is PlayerPayload.Episode -> k.asset.contentId
+            is PlayerPayload.Live -> ""
+        }
+    }
     var subtitulos by remember(payload) { mutableStateOf<List<SubtitleTrack>>(emptyList()) }
     var pistaSub by remember(payload) { mutableStateOf<String?>(null) }
     var escalaSub by remember(payload) { mutableStateOf(1f) }
@@ -149,19 +180,27 @@ fun PlayerScreen(
             is PlayerPayload.Live -> return
         }
         val ep = episodioActual
+        val capitulo = payload as? PlayerPayload.Episode
         val p = com.xuperclean.core.WatchProgress(
             contentId = ep?.contentId ?: asset.contentId,
             assetId = asset.contentId,
-            name = asset.name,
+            name = capitulo?.tituloSerie ?: asset.name,
             type = if (asset.isSeries) "0" else "1",
             isSeries = asset.isSeries,
             posterUrl = asset.posterList.firstOrNull()?.fileUrl,
             episodeId = ep?.contentId,
             episodeNumber = ep?.seriesNumber,
             episodeName = ep?.name,
-            seasonNumber = if (asset.isSeries) {
-                com.xuperclean.core.SeriesGrouping.seasonNumber(asset.name)
-            } else null,
+            seasonNumber = when {
+                !asset.isSeries -> null
+                // La ficha ya sabe en qué temporada está: no se adivina por el nombre
+                // del asset, que en la copia original puede no llevarla.
+                capitulo?.temporada != null -> capitulo.temporada
+                else -> com.xuperclean.core.SeriesGrouping.seasonNumber(asset.name)
+            },
+            aliasKey = capitulo?.serieKey
+                ?: asset.alias?.takeIf { it.isNotBlank() }
+                    ?.let { com.xuperclean.core.SeriesGrouping.baseName(it) },
             positionMs = posMs,
             durationMs = durMs,
             updatedAt = System.currentTimeMillis(),
@@ -169,7 +208,7 @@ fun PlayerScreen(
         if (com.xuperclean.core.WatchProgress.isResumable(posMs, durMs)) {
             com.xuperclean.desktop.data.DesktopWatchStore.save(p)
         } else if (posMs.toDouble() / durMs >= 0.95) {
-            com.xuperclean.desktop.data.DesktopWatchStore.remove(asset.contentId)
+            com.xuperclean.desktop.data.DesktopWatchStore.remove(p.clave)
         }
     }
 
@@ -254,6 +293,9 @@ fun PlayerScreen(
                     else {
                         fuentes = opciones
                         audios = XuperRepository.audio(ticket)
+                        codigosAudio = codigosDeAudio(primera.variant.audioInfo)
+                        audioElegido =
+                            com.xuperclean.desktop.data.DesktopWatchStore.audioIndex(idContenido)
                         subtitulos = XuperRepository.subtitles(ticket)
                         streamUrl = primera.url
                         streamHeaders = primera.headers
@@ -278,6 +320,9 @@ fun PlayerScreen(
                     else {
                         fuentes = opciones
                         audios = XuperRepository.audio(ticket)
+                        codigosAudio = codigosDeAudio(primera.variant.audioInfo)
+                        audioElegido =
+                            com.xuperclean.desktop.data.DesktopWatchStore.audioIndex(idContenido)
                         subtitulos = XuperRepository.subtitles(ticket)
                         streamUrl = primera.url
                         streamHeaders = primera.headers
@@ -322,6 +367,23 @@ fun PlayerScreen(
         p.setAudioLanguage(com.xuperclean.core.AudioTracks.preferenceChain(codigo))
     }
 
+    /**
+     * Aplica la pista de audio concreta por su id de mpv.
+     *
+     * Con dos pistas `spa` mpv no distingue latino de castellano, así que se usa la
+     * guardada a mano y, si no hay, la posición del `audioInfo` del portal (la primera
+     * pista española es latino, igual que en la app original).
+     */
+    fun aplicarPistaAudio(p: MpvPlayer) {
+        val lista = pistasMpv
+        if (lista.isEmpty()) return
+        val indice =
+            if (audioElegido in lista.indices) audioElegido
+            else indiceAudioAuto(lista.size, codigosAudio, idiomaAudio)
+        val pista = lista.getOrNull(indice) ?: return
+        p.setAudioTrack(pista.id)
+    }
+
     /** Cambia de variante conservando la posición (#7). */
     fun aplicarFuente(indice: Int) {
         val fuente = fuentes.getOrNull(indice) ?: return
@@ -331,6 +393,8 @@ fun PlayerScreen(
         terminado = false
         resolviendo = true
         errorMsg = null
+        // Pistas del archivo anterior: los ids de mpv cambian con cada fuente.
+        pistasMpv = emptyList()
         streamUrl = fuente.url
         streamHeaders = fuente.headers
         fuenteActual = indice
@@ -374,6 +438,12 @@ fun PlayerScreen(
         }
         player.onPausedChange = { pausado = it }
         player.onBuffer = { fin -> bufferedSegundos = fin }
+        // mpv publica las pistas al cargar: con el id real se elige la de latino aunque
+        // las dos estén etiquetadas `spa`.
+        player.onAudioTracks = { lista ->
+            pistasMpv = lista
+            aplicarPistaAudio(player)
+        }
         player.onLoaded = {
             resolviendo = false
             val objetivo = reanudarEn
@@ -382,7 +452,9 @@ fun PlayerScreen(
                 reanudarEn = 0.0
             }
             aplicarSubtitulo(player)
-            aplicarAudio(player, idiomaAudio)
+            // La pista exacta manda; el idioma queda como respaldo si mpv solo ve una.
+            if (pistasMpv.size > 1) aplicarPistaAudio(player)
+            else aplicarAudio(player, idiomaAudio)
         }
         fun tryNext(): Boolean {
             val siguiente = alternativas.firstOrNull() ?: return false
@@ -396,6 +468,7 @@ fun PlayerScreen(
             // La fuente en reproducción puede no ser la elegida: reflejarlo en ajustes.
             val indice = fuentes.indexOfFirst { it.url == siguiente.first }
             if (indice >= 0) fuenteActual = indice
+            pistasMpv = emptyList()
             streamUrl = siguiente.first
             streamHeaders = siguiente.second
             resolviendo = true
@@ -804,6 +877,16 @@ fun PlayerScreen(
         DesktopSettingsDialog(
             audios = audios,
             idiomaAudio = idiomaAudio,
+            pistasAudio = etiquetasDeAudio(codigosAudio, pistasMpv)
+                .mapIndexed { i, etiqueta -> i to etiqueta },
+            audioAuto = indiceAudioAuto(pistasMpv.size, codigosAudio, idiomaAudio),
+            // Un índice guardado de otra variante puede no existir: se muestra como auto.
+            audioElegido = if (audioElegido in pistasMpv.indices) audioElegido else -1,
+            onAudioPista = { indice ->
+                audioElegido = indice
+                com.xuperclean.desktop.data.DesktopWatchStore.saveAudioIndex(idContenido, indice)
+                mpv?.let { p -> aplicarPistaAudio(p) }
+            },
             subtitulos = subtitulos,
             pistaSub = pistaSub,
             escalaSub = escalaSub,
@@ -877,6 +960,10 @@ private fun formatearTiempo(segundos: Double): String {
 private fun DesktopSettingsDialog(
     audios: List<com.xuperclean.core.AudioTrack>,
     idiomaAudio: String,
+    pistasAudio: List<Pair<Int, String>>,
+    audioAuto: Int,
+    audioElegido: Int,
+    onAudioPista: (Int) -> Unit,
     subtitulos: List<SubtitleTrack>,
     pistaSub: String?,
     escalaSub: Float,
@@ -892,6 +979,10 @@ private fun DesktopSettingsDialog(
     // ajustes viven en una ventana propia (hija de la principal) con ComposePanel.
     val audiosS = rememberUpdatedState(audios)
     val idiomaAudioS = rememberUpdatedState(idiomaAudio)
+    val pistasAudioS = rememberUpdatedState(pistasAudio)
+    val audioAutoS = rememberUpdatedState(audioAuto)
+    val audioElegidoS = rememberUpdatedState(audioElegido)
+    val onAudioPistaS = rememberUpdatedState(onAudioPista)
     val subtitulosS = rememberUpdatedState(subtitulos)
     val pistaSubS = rememberUpdatedState(pistaSub)
     val escalaSubS = rememberUpdatedState(escalaSub)
@@ -903,7 +994,8 @@ private fun DesktopSettingsDialog(
     val onDismissS = rememberUpdatedState(onDismiss)
 
     val altoInicial = remember {
-        240 + (if (audios.size > 1) 24 + audios.size * 48 else 0) +
+        val nAudio = maxOf(pistasAudio.size, audios.size)
+        240 + (if (nAudio > 1) 24 + nAudio * 48 + 40 else 0) +
             (if (subtitulos.isNotEmpty()) 120 + subtitulos.size * 48 else 40) +
             24 + AjusteImagen.entries.size * 48
     }.coerceIn(320, 640)
@@ -920,6 +1012,10 @@ private fun DesktopSettingsDialog(
                     SettingsCard(
                         audios = audiosS.value,
                         idiomaAudio = idiomaAudioS.value,
+                        pistasAudio = pistasAudioS.value,
+                        audioAuto = audioAutoS.value,
+                        audioElegido = audioElegidoS.value,
+                        onAudioPista = { onAudioPistaS.value(it) },
                         subtitulos = subtitulosS.value,
                         pistaSub = pistaSubS.value,
                         escalaSub = escalaSubS.value,
@@ -968,6 +1064,10 @@ private fun DesktopSettingsDialog(
 private fun SettingsCard(
     audios: List<com.xuperclean.core.AudioTrack>,
     idiomaAudio: String,
+    pistasAudio: List<Pair<Int, String>>,
+    audioAuto: Int,
+    audioElegido: Int,
+    onAudioPista: (Int) -> Unit,
     subtitulos: List<SubtitleTrack>,
     pistaSub: String?,
     escalaSub: Float,
@@ -991,7 +1091,20 @@ private fun SettingsCard(
                     .weight(1f, fill = false),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                if (audios.size > 1) {
+                if (pistasAudio.isNotEmpty()) {
+                    // Pistas reales del contenedor: dos `spa` solo se distinguen por
+                    // posición, así que se numeran en vez de repetir «Español».
+                    Text("Audio", style = MaterialTheme.typography.titleSmall)
+                    pistasAudio.forEachIndexed { i, (_, etiqueta) ->
+                        val activa = if (audioElegido >= 0) audioElegido == i else i == audioAuto
+                        androidx.compose.material3.FilterChip(
+                            selected = activa,
+                            onClick = { onAudioPista(i) },
+                            label = { Text(etiqueta) },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                } else if (audios.size > 1) {
                     Text("Audio", style = MaterialTheme.typography.titleSmall)
                     audios.forEach { pista ->
                         androidx.compose.material3.FilterChip(
@@ -1038,18 +1151,73 @@ private fun SettingsCard(
                         valueRange = 0.7f..1.8f,
                         steps = 10,
                     )
-                } else {
-                    Text(
-                        "Este título no incluye subtítulos.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
                 }
             }
             Spacer(Modifier.height(8.dp))
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                // Versión visible: sin ella es imposible saber si se está probando la
+                // build recién instalada o una copia antigua de otra carpeta.
+                Text(
+                    "Xuper " + (System.getProperty("xuper.version") ?: ""),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
                 androidx.compose.material3.TextButton(onClick = onDismiss) { Text("Cerrar") }
             }
         }
     }
+}
+
+
+/** Códigos del `audioInfo` en orden y SIN deduplicar: cada uno es una pista del TS. */
+private fun codigosDeAudio(audioInfo: String?): List<String> {
+    if (audioInfo.isNullOrBlank()) return emptyList()
+    return audioInfo.split(',', ';', '/', '|')
+        .mapNotNull { com.xuperclean.core.AudioTracks.normalize(it) }
+}
+
+/**
+ * Etiqueta de cada pista de audio de mpv, en el orden del contenedor.
+ *
+ * El portal publica los códigos ISO en el mismo orden que las pistas del `_media.ts`,
+ * así que la posición decide: dos pistas `spa` se muestran como «Español» y
+ * «Español 2», igual que en la app móvil.
+ */
+private fun etiquetasDeAudio(
+    codigos: List<String>,
+    pistas: List<com.xuperclean.desktop.player.MpvAudioTrack>,
+): List<String> {
+    val repetidos = mutableMapOf<String, Int>()
+    return pistas.mapIndexed { i, pista ->
+        val base = codigos.getOrNull(i)
+            ?.let { com.xuperclean.core.AudioTracks.label(it) }
+            ?: pista.lang?.let { com.xuperclean.core.AudioTracks.label(it) }
+            ?: pista.title?.takeIf { it.isNotBlank() }
+            ?: "Pista ${i + 1}"
+        val veces = (repetidos[base] ?: 0) + 1
+        repetidos[base] = veces
+        if (veces > 1) "$base $veces" else base
+    }
+}
+
+/**
+ * Índice de audio de la preferencia guardada, leído del `audioInfo` del título.
+ *
+ * Sin coincidencia se usa la primera pista, igual que la app original.
+ */
+private fun indiceAudioAuto(
+    cuantas: Int,
+    codigos: List<String>,
+    idioma: String,
+): Int {
+    if (cuantas <= 0) return 0
+    for (codigo in com.xuperclean.core.AudioTracks.preferenceChain(idioma)) {
+        val i = codigos.indexOf(codigo)
+        if (i >= 0 && i < cuantas) return i
+    }
+    return 0
 }

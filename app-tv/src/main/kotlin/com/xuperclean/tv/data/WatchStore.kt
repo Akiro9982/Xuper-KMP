@@ -30,9 +30,10 @@ object WatchStore {
         p.edit().putString(KEY, WatchHistory.encode(lista)).apply()
     }
 
-    fun remove(assetId: String) {
+    /** Borra la entrada de la serie (por su clave) o de la película (por id). */
+    fun remove(clave: String) {
         val p = prefs ?: return
-        val lista = leer().filterNot { it.assetId == assetId }
+        val lista = WatchHistory.remove(leer(), clave)
         p.edit().putString(KEY, WatchHistory.encode(lista)).apply()
     }
 
@@ -44,6 +45,23 @@ object WatchStore {
     // ------------------------------------------------- preferencias de reproducción
 
     private const val KEY_AUDIO = "audio_language"
+
+    /**
+     * Pista de audio elegida a mano para un título (-1 = automática).
+     *
+     * Hace falta porque el contenedor puede traer dos pistas `spa` (latino y
+     * castellano) sin nada que las distinga: solo la posición de la pista permite
+     * recordar cuál suena como el usuario quiere.
+     */
+    fun audioIndex(assetId: String): Int {
+        if (assetId.isEmpty()) return -1
+        return prefs?.getInt("audio_index_$assetId", -1) ?: -1
+    }
+
+    fun saveAudioIndex(assetId: String, indice: Int) {
+        if (assetId.isEmpty()) return
+        prefs?.edit()?.putInt("audio_index_$assetId", indice)?.apply()
+    }
 
     /** Idioma de audio preferido (por defecto latino). */
     var audioLanguage: String

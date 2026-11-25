@@ -63,6 +63,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import com.xuperclean.core.WatchProgress
 import com.xuperclean.core.model.Channel
+import com.xuperclean.core.model.EpisodeInfo
 import com.xuperclean.core.model.VodAsset
 import com.xuperclean.core.update.UpdateState
 import com.xuperclean.desktop.data.DesktopWatchStore
@@ -94,6 +95,29 @@ sealed class Tab(val label: String) {
 sealed interface Overlay {
     data class Detail(val asset: VodAsset) : Overlay
     data class Player(val payload: PlayerPayload) : Overlay
+}
+
+/**
+ * «Continuar viendo» reabre el capítulo guardado como episodio, con su temporada y su
+ * número reales; si se abriera como película se perderían ambos (#8).
+ */
+private fun WatchProgress.toPlayerPayload(): PlayerPayload {
+    val epId = episodeId
+    return if (isSeries && epId != null) {
+        PlayerPayload.Episode(
+            asset = toVodAsset(),
+            episode = EpisodeInfo(
+                contentId = epId,
+                name = episodeName,
+                seriesNumber = episodeNumber,
+            ),
+            tituloSerie = name,
+            temporada = seasonNumber,
+            serieKey = aliasKey,
+        )
+    } else {
+        PlayerPayload.Vod(toVodAsset())
+    }
 }
 
 private val TABS = listOf(
@@ -167,7 +191,7 @@ fun AppRoot(
                     Tab.Destacados -> DestacadosScreen(
                         onOpenAsset = { a -> stack.add(Overlay.Detail(a)) },
                         // «Continuar viendo» reanuda el capítulo guardado (#8).
-                        onResume = { p -> stack.add(Overlay.Player(PlayerPayload.Vod(p.toVodAsset()))) },
+                        onResume = { p -> stack.add(Overlay.Player(p.toPlayerPayload())) },
                     )
                     Tab.Pelicula -> CatalogScreen(CatalogKind.Pelicula, onOpenAsset = { a -> stack.add(Overlay.Detail(a)) })
                     Tab.Series -> CatalogScreen(CatalogKind.Series, onOpenAsset = { a -> stack.add(Overlay.Detail(a)) })

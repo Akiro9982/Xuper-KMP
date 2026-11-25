@@ -16,6 +16,18 @@ enum class AjusteImagen(val etiqueta: String) {
 }
 
 /**
+ * Pista de audio publicada por mpv (`track-list`), en el orden del contenedor.
+ *
+ * [id] es el id real del archivo (no la posición): es lo que acepta la propiedad
+ * `aid`. [lang] y [title] pueden faltar (el TS del portal casi nunca trae título).
+ */
+data class MpvAudioTrack(
+    val id: Int,
+    val lang: String? = null,
+    val title: String? = null,
+)
+
+/**
  * Reproductor de escritorio basado en mpv embebido.
  *
  * Render: mpv dibuja dentro del panel AWT (`--wid=<hwnd>`); Compose pinta los controles encima.
@@ -57,6 +69,8 @@ class MpvPlayer(
     var onLoaded: (() -> Unit)? = null
     /** Búfer VOD: segundo del stream hasta donde hay datos descargados. */
     var onBuffer: ((Double) -> Unit)? = null
+    /** Pistas de audio reales del contenedor, en el orden del archivo. */
+    var onAudioTracks: ((List<MpvAudioTrack>) -> Unit)? = null
 
     /** Si se define, mpv escribe su log aquí (diagnóstico). */
     var logFile: File? = null
@@ -176,6 +190,8 @@ class MpvPlayer(
             }
             "pause" -> onPausedChange?.invoke(valor == "1")
             "cache" -> valor.toDoubleOrNull()?.let { onBuffer?.invoke(it) }
+            // Lista de pistas del archivo: mpv la publica al cargar y al cambiarla.
+            "audio" -> onAudioTracks?.invoke(parsearAudio(valor))
             "end" -> when (valor) {
                 "eof" -> {
                     running = false
@@ -263,6 +279,29 @@ class MpvPlayer(
         return comando("set", "aid", "auto")
     }
 
+    /**
+     * Selecciona una pista por su id real de mpv (el de `track-list`, no la posición).
+     *
+     * `--alang` no basta cuando el contenedor trae dos pistas `spa` (latino y
+     * castellano): mpv no las distingue por idioma y siempre elige la misma. Con el id
+     * se reproduce exactamente la pista pedida.
+     */
+    fun setAudioTrack(id: Int): Boolean = comando("set", "aid", id.toString())
+
+    /** Pistas de audio de una línea `id|idioma|título;...` publicada por el script Lua. */
+    private fun parsearAudio(valor: String): List<MpvAudioTrack> {
+        if (valor.isBlank()) return emptyList()
+        return valor.split(';').mapNotNull { trozo ->
+            val partes = trozo.split('|')
+            val id = partes.getOrNull(0)?.trim()?.toIntOrNull() ?: return@mapNotNull null
+            MpvAudioTrack(
+                id = id,
+                lang = partes.getOrNull(1)?.trim()?.takeIf { it.isNotEmpty() && it != "-" },
+                title = partes.getOrNull(2)?.trim()?.takeIf { it.isNotEmpty() && it != "-" },
+            )
+        }
+    }
+
     fun stop() {
         running = false
         process?.let { p -> try { p.destroy() } catch (_: Exception) { } }
@@ -273,14 +312,21 @@ class MpvPlayer(
 
     // ---------------------------------------------------------------- lua
 
-    /** Escribe el script de estado una sola vez en %TEMP% y devuelve su ruta. */
+    /**
+     * Escribe el script de estado en %TEMP% y devuelve su ruta.
+     *
+     * Se compara el contenido, no el tamaño: un `xuper-state.lua` de otra versión
+     * (por ejemplo uno anterior que no publicaba `audio`) se queda obsoleto y la app
+     * enseñaría menos pistas de las que trae el contenedor, sin ningún error visible.
+     */
     private fun escribirScript(): String {
         val dir = File(System.getProperty("java.io.tmpdir"), "xuper-mpv")
         dir.mkdirs()
         val archivo = File(dir, "xuper-state.lua")
-        if (!archivo.exists() || archivo.length() != SCRIPT_LUA.toByteArray(Charsets.UTF_8).size.toLong()) {
-            archivo.writeText(SCRIPT_LUA, Charsets.UTF_8)
-        }
+        val actual = runCatching {
+            if (archivo.exists()) archivo.readText(Charsets.UTF_8) else null
+        }.getOrNull()
+        if (actual != SCRIPT_LUA) archivo.writeText(SCRIPT_LUA, Charsets.UTF_8)
         return archivo.absolutePath
     }
 
@@ -398,6 +444,21 @@ class MpvPlayer(
                     ultimoCache = v
                     enviar("cache " .. numero(v))
                 end
+            end)
+
+            -- Pistas de audio con su id real: con dos pistas `spa` (latino y de España)
+            -- el idioma no basta para elegir, y la app necesita el id de `aid`.
+            mp.observe_property("track-list", "native", function(_, lista)
+                if lista == nil then return end
+                local partes = {}
+                for _, t in ipairs(lista) do
+                    if t.type == "audio" then
+                        local lang = tostring(t.lang or ""):gsub("[|;\n]", " ")
+                        local title = tostring(t.title or ""):gsub("[|;\n]", " ")
+                        partes[#partes + 1] = tostring(t.id) .. "|" .. lang .. "|" .. title
+                    end
+                end
+                enviar("audio " .. table.concat(partes, ";"))
             end)
 
             mp.register_event("file-loaded", function() enviar("loaded") end)

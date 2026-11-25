@@ -1,8 +1,11 @@
 package com.xuperclean.mobile.ui.player
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.ViewGroup
+import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.slideInVertically
@@ -24,9 +27,11 @@ import androidx.compose.material.icons.filled.Forward10
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -90,6 +95,7 @@ import androidx.media3.ui.PlayerView
 import com.xuperclean.core.model.EpisodeInfo
 import com.xuperclean.core.model.VodAsset
 import com.xuperclean.core.SubtitleTrack
+import com.xuperclean.mobile.data.PlaybackPrefs
 import com.xuperclean.mobile.data.VodStream
 import com.xuperclean.mobile.diag.Diag
 import com.xuperclean.mobile.data.XuperRepository
@@ -108,8 +114,26 @@ sealed interface PlayerPayload {
         override val title: String get() = asset.name
     }
 
-    data class Episode(val asset: VodAsset, val episode: EpisodeInfo) : PlayerPayload {
-        override val title: String get() = episode.name ?: asset.name
+    data class Episode(
+        val asset: VodAsset,
+        val episode: EpisodeInfo,
+        /** Nombre visible de la serie; el episodio puede venir de una copia con otro título. */
+        val tituloSerie: String? = null,
+        /** Temporada según la ficha; el asset de la copia no siempre la lleva en el nombre. */
+        val temporada: Int? = null,
+        /** Título original de la serie: una sola tarjeta en «Continuar viendo». */
+        val serieKey: String? = null,
+    ) : PlayerPayload {
+        override val title: String
+            get() = buildString {
+                append(tituloSerie ?: com.xuperclean.core.SeriesGrouping.searchTitle(asset.name))
+                append(" · T")
+                append(
+                    temporada
+                        ?: com.xuperclean.core.SeriesGrouping.seasonNumber(asset.name),
+                )
+                episode.seriesNumber?.takeIf { it > 0 }?.let { append(" · E").append(it) }
+            }
     }
 }
 
@@ -125,6 +149,7 @@ sealed interface PlayerPayload {
 fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
     val context = LocalContext.current
     Diag.init(context.applicationContext)
+    PlaybackPrefs.init(context)
     var resolviendo by remember(payload) { mutableStateOf(true) }
     var errorMsg by remember(payload) { mutableStateOf<String?>(null) }
     var streamUrl by remember(payload) { mutableStateOf<String?>(null) }
@@ -148,17 +173,41 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
     var isLive by remember(payload) { mutableStateOf(false) }
     var fuentes by remember(payload) { mutableStateOf<List<VodStream>>(emptyList()) }
     var fuenteActual by remember(payload) { mutableIntStateOf(0) }
+    // Pistas de audio reales del contenedor. El portal solo publica códigos ISO por
+    // pista (`audioInfo`), así que la lista buena sale del propio stream al abrirlo.
+    var pistasAudio by remember(payload) { mutableStateOf<List<PistaAudio>>(emptyList()) }
+    // Códigos ISO en el MISMO orden que las pistas del contenedor (sin deduplicar).
+    var codigosAudio by remember(payload) { mutableStateOf<List<String>>(emptyList()) }
+    // Idiomas deducidos del `audioInfo`: respaldo cuando el extractor no publica las
+    // pistas (el contenedor puede traer una sola), para no quedarse sin selector.
     var audios by remember(payload) {
         mutableStateOf<List<com.xuperclean.core.AudioTrack>>(emptyList())
     }
     var idiomaAudio by remember(payload) {
         mutableStateOf(com.xuperclean.mobile.data.WatchStore.audioLanguage)
     }
+    val idContenido = remember(payload) {
+        when (val k = payload) {
+            is PlayerPayload.Vod -> k.asset.contentId
+            is PlayerPayload.Episode -> k.asset.contentId
+            is PlayerPayload.Live -> ""
+        }
+    }
+    // Pista elegida a mano (-1 = automática). Se recuerda por título: cuando el
+    // contenedor trae dos pistas `spa` no hay etiqueta que distinga latino de castellano.
+    var audioElegido by remember(payload) {
+        mutableIntStateOf(com.xuperclean.mobile.data.WatchStore.audioIndex(idContenido))
+    }
     var subtitulos by remember(payload) { mutableStateOf<List<SubtitleTrack>>(emptyList()) }
     var pistaSub by remember(payload) { mutableStateOf<String?>(null) }
     var escalaSub by remember(payload) { mutableFloatStateOf(1f) }
     var verAjustes by remember { mutableStateOf(false) }
     var playerView by remember { mutableStateOf<PlayerView?>(null) }
+    // Modo de vídeo y generación del motor: cambiarlos recrea el ExoPlayer con otro
+    // juego de decodificadores, conservando la posición (ver «vigilante de imagen»).
+    var modoVideo by remember(payload) { mutableStateOf(PlaybackPrefs.modoVideo) }
+    var generacion by remember(payload) { mutableIntStateOf(0) }
+    var recuperando by remember(payload) { mutableStateOf(false) }
     var reanudarEn by remember(payload) { mutableLongStateOf(0L) }
     var posicionActual by remember { mutableLongStateOf(0L) }
     // Última posición con contenido: al cambiar de fuente el player vuelve a 0 y no se
@@ -184,19 +233,27 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
             is PlayerPayload.Live -> return
         }
         val ep = episodioActual
+        val capitulo = payload as? PlayerPayload.Episode
         val p = com.xuperclean.core.WatchProgress(
             contentId = ep?.contentId ?: asset.contentId,
             assetId = asset.contentId,
-            name = asset.name,
+            name = capitulo?.tituloSerie ?: asset.name,
             type = if (asset.isSeries) "0" else "1",
             isSeries = asset.isSeries,
             posterUrl = asset.posterList.firstOrNull()?.fileUrl,
             episodeId = ep?.contentId,
             episodeNumber = ep?.seriesNumber,
             episodeName = ep?.name,
-            seasonNumber = if (asset.isSeries) {
-                com.xuperclean.core.SeriesGrouping.seasonNumber(asset.name)
-            } else null,
+            seasonNumber = when {
+                !asset.isSeries -> null
+                // La ficha ya sabe en qué temporada está: no se adivina por el nombre
+                // del asset, que en la copia original puede no llevarla.
+                capitulo?.temporada != null -> capitulo.temporada
+                else -> com.xuperclean.core.SeriesGrouping.seasonNumber(asset.name)
+            },
+            aliasKey = capitulo?.serieKey
+                ?: asset.alias?.takeIf { it.isNotBlank() }
+                    ?.let { com.xuperclean.core.SeriesGrouping.baseName(it) },
             positionMs = posMs,
             durationMs = durMs,
             updatedAt = System.currentTimeMillis(),
@@ -204,7 +261,7 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
         if (com.xuperclean.core.WatchProgress.isResumable(posMs, durMs)) {
             com.xuperclean.mobile.data.WatchStore.save(p)
         } else if (posMs.toDouble() / durMs >= 0.95) {
-            com.xuperclean.mobile.data.WatchStore.remove(asset.contentId)
+            com.xuperclean.mobile.data.WatchStore.remove(p.clave)
         }
     }
     var alternativas by remember(payload) {
@@ -215,6 +272,9 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
     fun usarFuente(url: String, headers: Map<String, String>) {
         cabeceras.clear()
         cabeceras.putAll(headers)
+        // Al cambiar de fuente el motor resuelve pistas nuevas y los índices de audio
+        // viejos dejan de valer: se vuelven a leer del stream y se reaplica la elección.
+        pistasAudio = emptyList()
         streamUrl = url
     }
 
@@ -244,6 +304,7 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
         reintentoAgotado = false
         errorMsg = null
     }
+
 
     /** Reintento manual desde el aviso de error: no hace falta salir del reproductor. */
     fun reintentarAhora() {
@@ -296,6 +357,7 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
                     if (primera == null) errorMsg = "Contenido no disponible"
                     else {
                         fuentes = opciones
+                        codigosAudio = codigosDeAudio(opciones.firstOrNull()?.variant?.audioInfo)
                         audios = XuperRepository.audio(ticket)
                         subtitulos = XuperRepository.subtitles(ticket)
                         usarFuente(primera.url, primera.headers)
@@ -319,6 +381,7 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
                     if (primera == null) errorMsg = "Episodio no disponible"
                     else {
                         fuentes = opciones
+                        codigosAudio = codigosDeAudio(opciones.firstOrNull()?.variant?.audioInfo)
                         audios = XuperRepository.audio(ticket)
                         subtitulos = XuperRepository.subtitles(ticket)
                         usarFuente(primera.url, primera.headers)
@@ -335,18 +398,25 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
 
     val diagnostico = remember(payload) { DiagnosticoListener() }
 
-    val player = remember(payload) {
+    val player = remember(payload, modoVideo, generacion) {
         // Fallback de decodificadores: si el del fabricante falla, Media3 prueba otro
         // en lugar de dejar la imagen en negro. El fichero `sw` fuerza software.
-        val selector = if (Diag.forzarSoftware) {
+        //
+        // El modo elegido (o el que decide el vigilante de imagen) cambia la lista de
+        // decodificadores; al ser clave de `remember`, el motor se reconstruye con la
+        // nueva selección y se retoma la posición guardada en `reanudarEn`.
+        fun solo(acelerados: Boolean): MediaCodecSelector =
             MediaCodecSelector { tipo, seguro, tunel ->
                 MediaCodecSelector.DEFAULT.getDecoderInfos(tipo, seguro, tunel)
-                    .filterNot { it.hardwareAccelerated }
+                    .filter { it.hardwareAccelerated == acelerados }
                     .ifEmpty { MediaCodecSelector.DEFAULT.getDecoderInfos(tipo, seguro, tunel) }
             }
-        } else {
-            MediaCodecSelector.DEFAULT
+        val selector = when {
+            Diag.forzarSoftware || modoVideo == PlaybackPrefs.ModoVideo.SOFTWARE -> solo(false)
+            modoVideo == PlaybackPrefs.ModoVideo.HARDWARE -> solo(true)
+            else -> MediaCodecSelector.DEFAULT
         }
+        Diag.i("Motor de vídeo: modo=$modoVideo generación=$generacion")
         val renderizadores = androidx.media3.exoplayer.DefaultRenderersFactory(context)
             .setEnableDecoderFallback(true)
             .setMediaCodecSelector(selector)
@@ -417,10 +487,83 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
             }
     }
 
-    // --- Vigilancia de imagen congelada -------------------------------------
-    // En algunos decodificadores del fabricante la imagen se detiene y el audio sigue
-    // sonando; retroceder un poco lo arregla, así que aquí se detecta el síncope y se
-    // refresca el decodificador automáticamente, sin que el usuario toque nada.
+    /**
+     * Índice de audio de la preferencia guardada, leído del `audioInfo` del título.
+     *
+     * El portal publica los códigos en el mismo orden que las pistas del `_media.ts`,
+     * así que la posición es la única información fiable para el latino. Sin
+     * coincidencia se usa la primera pista, igual que la app original.
+     */
+    fun indiceAudioAuto(): Int {
+        if (pistasAudio.isEmpty()) return 0
+        val cadena = com.xuperclean.core.AudioTracks.preferenceChain(
+            com.xuperclean.mobile.data.WatchStore.audioLanguage,
+        )
+        for (codigo in cadena) {
+            val i = codigosAudio.indexOf(codigo)
+            if (i >= 0 && i < pistasAudio.size) return i
+        }
+        return 0
+    }
+
+    /** Idioma que corresponde a la preferencia guardada dentro de `audios`. */
+    fun idiomaAuto(): String? = com.xuperclean.core.AudioTracks
+        .pick(audios, com.xuperclean.mobile.data.WatchStore.audioLanguage)?.code
+
+    /**
+     * Fija una pista de audio concreta (grupo de Media3 + índice dentro del grupo).
+     *
+     * Con dos pistas `spa` (latino y castellano) Media3 las ve iguales y desempata por
+     * calidad, así que puede quedarse con la de España. La app original reproduce la
+     * primera del `audioInfo`; aquí se replica y, si el usuario elige otra, se respeta.
+     *
+     * El extractor de TS publica un grupo por PID, de un solo índice, así que la pista
+     * se identifica por el grupo y no por una posición dentro de él.
+     */
+    fun aplicarPistaAudio(pista: PistaAudio) {
+        player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+            .setTrackTypeDisabled(androidx.media3.common.C.TRACK_TYPE_AUDIO, false)
+            .clearOverridesOfType(androidx.media3.common.C.TRACK_TYPE_AUDIO)
+            .addOverride(
+                androidx.media3.common.TrackSelectionOverride(
+                    pista.grupo,
+                    listOf(pista.indice),
+                )
+            )
+            .build()
+        Diag.i(
+            "Audio: pista «${pista.etiqueta}» (${pista.posicion + 1}/${pistasAudio.size}, " +
+                "grupo de ${pista.grupo.length}, audioInfo=${codigosAudio.joinToString(",")})"
+        )
+    }
+
+    /**
+     * Respaldo por idioma: se usa cuando el contenedor solo deja ver una pista y el
+     * portal sí declara varios idiomas en `audioInfo`. Es la selección que había antes.
+     */
+    fun aplicarIdioma(codigo: String) {
+        idiomaAudio = codigo
+        com.xuperclean.mobile.data.WatchStore.audioLanguage = codigo
+        val cadena = com.xuperclean.core.AudioTracks.preferenceChain(codigo)
+        player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+            .setTrackTypeDisabled(androidx.media3.common.C.TRACK_TYPE_AUDIO, false)
+            .clearOverridesOfType(androidx.media3.common.C.TRACK_TYPE_AUDIO)
+            .setPreferredAudioLanguages(*cadena.toTypedArray())
+            .build()
+        Diag.i("Audio: idioma «$codigo» (cadena=${cadena.joinToString(",")})")
+    }
+    // --- Vigilante de imagen ------------------------------------------------
+    // El audio y el vídeo usan decodificadores distintos. Cuando la imagen se para y el
+    // sonido continúa, el atasco está en el vídeo (o en fotogramas que llegan tarde y
+    // Media3 descarta hasta dejar el último pintado), no en la red: sin datos, ExoPlayer
+    // pasaría a BUFFERING y también callaría el audio.
+    //
+    // Antes se esperaban 5 s y se retrocedía 1 s: la imagen volvía, pero el vídeo se
+    // atascaba otra vez al rato porque nada cambiaba de fondo. Ahora se detecta en ~1,2 s
+    // y se escala en cuatro pasos, del más barato al más contundente. Si el aparato no
+    // puede con el capítulo, se cambia de fuente (calidad más ligera) o de decodificador
+    // en lugar de repetir el mismo parche.
+    val vigilante = remember(payload) { VigilanteImagen() }
     val ultimoFotogramaMs = remember(player) { AtomicLong(0L) }
     val latidoVideo = remember(player) {
         VideoFrameMetadataListener { _, _, _, _ ->
@@ -435,17 +578,107 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
         onDispose { player.clearVideoFrameMetadataListener(latidoVideo) }
     }
 
-    LaunchedEffect(player, streamUrl, isLive) {
+    /** Motor nuevo con los mismos ajustes, retomando la posición actual. */
+    fun reconstruirMotor(motivo: String) {
+        val pos = player.currentPosition
+        Diag.w("Vídeo: reconstruyendo el motor en $pos ms ($motivo)")
+        reanudarEn = maxOf(pos, ultimaPosicionValida)
+        generacion++
+    }
+
+    /**
+     * Pasa a los decodificadores software (los de Android). No vuelve sola al del
+     * fabricante: si el software no da abasto, la prueba de rendimiento lo deshace.
+     */
+    fun cambiarDecodificador(): Boolean {
+        if (modoVideo == PlaybackPrefs.ModoVideo.SOFTWARE || vigilante.softwareDescartado) {
+            return false
+        }
+        Diag.w("Vídeo: cambiando a los decodificadores software")
+        reanudarEn = maxOf(player.currentPosition, ultimaPosicionValida)
+        vigilante.iniciarPruebaSoftware(
+            android.os.SystemClock.elapsedRealtime(),
+            diagnostico.descartados,
+            automatica = true,
+        )
+        modoVideo = PlaybackPrefs.ModoVideo.SOFTWARE
+        PlaybackPrefs.modoVideo = PlaybackPrefs.ModoVideo.SOFTWARE
+        return true
+    }
+
+    /** Fuente de menor resolución que la actual, conservando la posición. */
+    fun usarFuenteMasLigera(): Boolean {
+        if (fuentes.size < 2) return false
+        val actual = calidadDe(fuentes.getOrNull(fuenteActual))
+        val indice = fuentes.indices
+            .filter { it != fuenteActual }
+            .mapNotNull { i -> calidadDe(fuentes[i])?.let { c -> i to c } }
+            .filter { (_, calidad) -> actual == null || calidad < actual }
+            .maxByOrNull { (_, calidad) -> calidad }
+            ?.first
+            ?: return false
+        Diag.w(
+            "Vídeo: la fuente es demasiado pesada; cambiando a ${fuentes[indice].label}",
+        )
+        aplicarFuente(indice)
+        return true
+    }
+
+    /** Cambia a una fuente más ligera, una sola vez por sesión de reproducción. */
+    fun intentarFuenteLigera(): Boolean {
+        if (vigilante.fuenteCambiada) return false
+        if (!usarFuenteMasLigera()) return false
+        vigilante.fuenteCambiada = true
+        return true
+    }
+
+    /**
+     * Escalones de recuperación. El orden sale de la evidencia de campo: en el móvil
+     * real, retroceder, rearmar la superficie y reconstruir el motor NO arreglaban el
+     * cuelgue; lo arreglaba el decodificador software. Por eso el software va segundo y
+     * los remedios que ya fallaron quedan al final.
+     */
+    fun aplicarPaso(paso: Int, pos: Long) {
+        recuperando = true
+        when (paso) {
+            0 -> {
+                Diag.w("Vídeo: imagen congelada en $pos ms con audio activo; retrocediendo 1 s")
+                vigilante.ultimoSalto = android.os.SystemClock.elapsedRealtime()
+                player.seekTo((pos - 1_000L).coerceAtLeast(0L))
+            }
+            1 -> {
+                if (cambiarDecodificador()) {
+                    Toast.makeText(
+                        context,
+                        "Imagen congelada: paso a decodificación software.",
+                        Toast.LENGTH_LONG,
+                    ).show()
+                } else if (!intentarFuenteLigera()) {
+                    reconstruirMotor("el software ya está descartado")
+                }
+            }
+            2 -> {
+                if (!intentarFuenteLigera()) {
+                    reconstruirMotor("sin fuentes más ligeras")
+                }
+            }
+            else -> {
+                Diag.w("Vídeo: último recurso; reconstruyendo el motor")
+                reconstruirMotor("último recurso")
+                recuperando = false
+            }
+        }
+    }
+
+    LaunchedEffect(player, streamUrl, isLive, generacion) {
         if (isLive) return@LaunchedEffect
+        val arranque = android.os.SystemClock.elapsedRealtime()
         var posicionPrevia = -1L
-        var ultimaRecuperacion = 0L
-        var ultimoRearme = 0L
-        var seeksSeguidos = 0
         var bytesPrevios = bytesDescargados.get()
-        var instanteBytes = android.os.SystemClock.elapsedRealtime()
+        var instanteBytes = arranque
         var tasaBps = 0L
         while (true) {
-            delay(1_000)
+            delay(500)
             val ahora = android.os.SystemClock.elapsedRealtime()
             val bytesAhora = bytesDescargados.get()
             val transcurrido = (ahora - instanteBytes).coerceAtLeast(1L)
@@ -455,61 +688,132 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
                 instanteBytes = ahora
             }
             val pos = player.currentPosition
-            val avanza = pos - posicionPrevia >= 800
+            val salto = pos - posicionPrevia
+            if (posicionPrevia >= 0L && (salto < -1_500L || salto > 5_000L)) {
+                // Salto del usuario (barra o doble toque): no es un atasco.
+                vigilante.ultimoSalto = ahora
+            }
             posicionPrevia = pos
-            val ultimo = ultimoFotogramaMs.get()
             val duracion = player.duration
-            val bufDelante = player.bufferedPosition - pos
+            val estado = player.playbackState
             val cargando = player.isLoading
-            // Sólo hay atasco del decodificador si sobran datos: con el búfer vacío o
-            // cargando el problema es la red, y un seek ahí reinicia la descarga y empeora
-            // el corte (producía ciclos de congelación/reanudación).
-            val imagenQuieta = !cargando && bufDelante > 4_000 &&
-                ultimo > 0L && ahora - ultimo > 5_000
-            val enReproduccion = player.isPlaying &&
-                player.playbackState == Player.STATE_READY &&
-                (duracion <= 0L || pos < duracion - 10_000)
+            val bufDelante = player.bufferedPosition - pos
+            val ultimo = ultimoFotogramaMs.get()
+            // Sin fotograma todavía se mide desde que arrancó este motor, no desde 0.
+            val sinFotograma = if (ultimo > 0L) ahora - ultimo else ahora - arranque
+            val alFinal = duracion > 0L && pos >= duracion - 5_000L
+            // Sin pista de vídeo (contenido solo de audio) no hay imagen que vigilar.
+            val hayVideo = ultimo > 0L || player.videoSize.width > 0
+            val enMarcha = hayVideo && player.isPlaying && estado == Player.STATE_READY &&
+                !cargando && !alFinal && ahora - arranque > 4_000L
+            val imagenViva = ultimo > 0L && sinFotograma <= 1_500L
+            val congelada = enMarcha && bufDelante > 3_000L && sinFotograma > 1_200L &&
+                ahora - vigilante.ultimoSalto > 2_000L
             Diag.v(
-                "pos=$pos dur=$duracion buf=${player.bufferedPosition - pos} " +
-                    "estado=${nombreEstado(player.playbackState)} playing=${player.isPlaying} " +
-                    "loading=${player.isLoading} dec=${diagnostico.decodificador ?: "-"} " +
-                    "bajados=${bytesAhora / 1024}KB tasa=${tasaBps / 1024}KB/s " +
-                    "descartados=${diagnostico.descartados} underrun=${diagnostico.underruns} " +
-                    "frameHace=${if (ultimo > 0L) ahora - ultimo else -1}ms",
+                "pos=$pos dur=$duracion buf=$bufDelante estado=${nombreEstado(estado)} " +
+                    "playing=${player.isPlaying} loading=$cargando " +
+                    "dec=${diagnostico.decodificador ?: "-"} bajados=${bytesAhora / 1024}KB " +
+                    "tasa=${tasaBps / 1024}KB/s descartados=${diagnostico.descartados} " +
+                    "underrun=${diagnostico.underruns} frameHace=$sinFotograma " +
+                    "paso=${vigilante.paso} fuente=$fuenteActual/${fuentes.size}",
             )
-            if (imagenQuieta && avanza && enReproduccion && ahora - ultimaRecuperacion > 15_000) {
-                ultimaRecuperacion = ahora
-                // Evita reintentos mientras el decodificador se rearma.
-                ultimoFotogramaMs.set(ahora)
-                Diag.w(
-                    "Imagen congelada en ${pos} ms con audio activo: refrescando decodificador " +
-                        "(buf=$bufDelante carga=$cargando dec=${diagnostico.decodificador} " +
-                        "descartados=${diagnostico.descartados})",
-                )
-                Diag.volcarHilos("imagen congelada en ${pos} ms")
-                if (seeksSeguidos >= 1 && ahora - ultimoRearme > 30_000) {
-                    // El seek no bastó: se rearma la superficie de vídeo, que reinicia el
-                    // códec sin tocar el audio ni volver a descargar el tramo.
-                    seeksSeguidos = 0
-                    ultimoRearme = ahora
-                    Diag.w("Reaplicando superficie de vídeo para reiniciar el códec")
-                    val vista = playerView?.videoSurfaceView as? SurfaceView
-                    if (vista != null) {
-                        player.clearVideoSurface()
-                        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(
-                            { player.setVideoSurfaceView(vista) },
-                            400L,
-                        )
-                    }
+            // Prueba del decodificador software: si no mantiene el ritmo, se deshace en
+            // vez de dejar la imagen a tirones (peor que el cuelgue que se quería evitar).
+            if (vigilante.pruebaHasta > 0L && ahora >= vigilante.pruebaHasta) {
+                val descartes = diagnostico.descartados - vigilante.descartesPrueba
+                vigilante.pruebaHasta = 0L
+                if (descartes > 200 && vigilante.pruebaAutomatica) {
+                    Diag.w(
+                        "Vídeo: el decodificador software no da abasto " +
+                            "($descartes fotogramas descartados en 25 s); volviendo al del fabricante",
+                    )
+                    vigilante.softwareDescartado = true
+                    reanudarEn = maxOf(pos, ultimaPosicionValida)
+                    modoVideo = PlaybackPrefs.ModoVideo.AUTO
+                    PlaybackPrefs.modoVideo = PlaybackPrefs.ModoVideo.AUTO
+                    Toast.makeText(
+                        context,
+                        "El decodificador software no da abasto: vuelvo a Automático.",
+                        Toast.LENGTH_LONG,
+                    ).show()
                 } else {
-                    seeksSeguidos++
-                    player.seekTo((pos - 1_000).coerceAtLeast(0L))
+                    Diag.i("Vídeo: el decodificador software mantiene el ritmo")
                 }
-            } else if (ahora - ultimo < 3_000 && ahora - ultimaRecuperacion > 20_000) {
-                // Imagen sana: se olvidan los rearmes para no encadenar castigos.
-                seeksSeguidos = 0
+            }
+            if (congelada) {
+                if (!vigilante.enCurso) {
+                    vigilante.registrarEpisodio()
+                    Diag.w(
+                        "Vídeo: imagen congelada en $pos ms con audio activo " +
+                            "(búfer +${bufDelante / 1000}s, dec=${diagnostico.decodificador}, " +
+                            "descartados=${diagnostico.descartados}, " +
+                            "episodios=${vigilante.episodios})",
+                    )
+                    Diag.volcarHilos("imagen congelada en $pos ms")
+                    vigilante.enCurso = true
+                    vigilante.paso = vigilante.pasoInicial()
+                    vigilante.ultimaAccion = ahora
+                    aplicarPaso(vigilante.paso, pos)
+                } else if (vigilante.paso < 3 && ahora - vigilante.ultimaAccion >= ESPERA_PASO) {
+                    vigilante.paso++
+                    vigilante.ultimaAccion = ahora
+                    aplicarPaso(vigilante.paso, pos)
+                }
+            } else if (vigilante.enCurso && imagenViva &&
+                ahora - vigilante.ultimaAccion >= 1_500L
+            ) {
+                Diag.i("Vídeo: imagen recuperada en $pos ms (paso ${vigilante.paso})")
+                vigilante.enCurso = false
+                vigilante.paso = -1
+                recuperando = false
+            } else if (vigilante.enCurso && !player.playWhenReady) {
+                // El usuario pausó: no hay imagen que recuperar y el aviso no puede
+                // quedarse colgado en pantalla. `playWhenReady` distingue una pausa real
+                // de un búfer momentáneo durante una reconstrucción.
+                vigilante.enCurso = false
+                vigilante.paso = -1
+                recuperando = false
             }
         }
+    }
+
+    /** Texto que el usuario puede pegar en el chat sin conectar el móvil a nada. */
+    fun copiarInforme() {
+        val informe = Diag.informe(
+            encabezado = buildString {
+                appendLine("Título: ${payload.title}")
+                appendLine(
+                    "Fuente: ${fuentes.getOrNull(fuenteActual)?.label ?: "-"} " +
+                        "(${fuenteActual + 1}/${fuentes.size})",
+                )
+                appendLine("Modo de vídeo: $modoVideo")
+                appendLine("Decodificador: ${diagnostico.decodificador ?: "-"}")
+                appendLine(
+                    "Audio: ${pistasAudio.getOrNull(
+                        if (audioElegido >= 0) audioElegido else indiceAudioAuto(),
+                    )?.etiqueta ?: idiomaAudio} de ${pistasAudio.size} pista(s) " +
+                        "(audioInfo=${codigosAudio.joinToString(",")}, idiomas=${audios.joinToString(",") { it.code }})",
+                )
+                appendLine("Posición: ${player.currentPosition} de ${player.duration} ms")
+                appendLine(
+                    "Búfer por delante: ${player.bufferedPosition - player.currentPosition} ms",
+                )
+                appendLine(
+                    "Descartados: ${diagnostico.descartados} · underruns: ${diagnostico.underruns}",
+                )
+                appendLine(
+                    "Congelamientos atendidos: ${vigilante.episodios} " +
+                        "(paso ${vigilante.paso}, ${if (vigilante.enCurso) "en curso" else "resuelto"})",
+                )
+            },
+        )
+        Diag.guardar(informe)
+        runCatching {
+            context.getSystemService(ClipboardManager::class.java)
+                ?.setPrimaryClip(ClipData.newPlainText("Informe Xuper", informe))
+        }
+        Toast.makeText(context, "Informe copiado: pégalo en el chat.", Toast.LENGTH_LONG).show()
+        Diag.i("Informe de reproducción copiado (${informe.length} caracteres)")
     }
 
     DisposableEffect(player) {
@@ -559,15 +863,28 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
             .build()
     }
 
-    // Audio: el mismo stream trae varias pistas y el contenedor no marca ninguna como
-    // predeterminada, así que la preferencia (por defecto latino) se aplica siempre.
-    LaunchedEffect(player, idiomaAudio, streamUrl) {
-        if (audios.isEmpty()) return@LaunchedEffect
-        val cadena = com.xuperclean.core.AudioTracks.preferenceChain(idiomaAudio)
-        player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
-            .setTrackTypeDisabled(androidx.media3.common.C.TRACK_TYPE_AUDIO, false)
-            .setPreferredAudioLanguages(*cadena.toTypedArray())
-            .build()
+    // Audio: se fija por ÍNDICE en cuanto el contenedor publica sus pistas. Elegir por
+    // idioma no basta: dos pistas `spa` (latino y castellano) empatan para Media3, que
+    // desempata por calidad y puede quedarse con la de España. El índice respeta la
+    // preferencia guardada y, si el usuario eligió otra pista, su elección.
+    LaunchedEffect(player, streamUrl, pistasAudio, audioElegido, audios) {
+        if (pistasAudio.isEmpty()) return@LaunchedEffect
+        // Con una sola pista visible manda el respaldo por idioma (ver abajo).
+        if (pistasAudio.size <= 1 && audios.size > 1) return@LaunchedEffect
+        val posicion = if (audioElegido >= 0) {
+            audioElegido.coerceIn(0, pistasAudio.lastIndex)
+        } else {
+            indiceAudioAuto()
+        }
+        pistasAudio.getOrNull(posicion)?.let { aplicarPistaAudio(it) }
+    }
+
+    // Respaldo: si el contenedor solo publica una pista (o el aparato no soporta las
+    // demás), se elige por idioma con lo que declara el `audioInfo`. Antes esto era el
+    // único comportamiento; se conserva para que el selector no desaparezca nunca.
+    LaunchedEffect(player, streamUrl, audios, idiomaAudio) {
+        if (pistasAudio.size > 1 || audios.size <= 1) return@LaunchedEffect
+        aplicarIdioma(idiomaAudio)
     }
 
     // Tamaño de subtítulos (100 % = 16 sp).
@@ -599,6 +916,16 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
             if (positionMs > 0L) ultimaPosicionValida = positionMs
             durationMs = player.duration.coerceAtLeast(0L)
             duracionActual = durationMs
+            // Las pistas de audio aparecen en cuanto el extractor lee el PMT del TS.
+            val nuevas = pistasDeAudio(player, codigosAudio)
+            if (nuevas != pistasAudio) {
+                pistasAudio = nuevas
+                Diag.i(
+                    "Audio: ${nuevas.size} pista(s) en el archivo " +
+                        "[${nuevas.joinToString(", ") { it.etiqueta }}] " +
+                        "audioInfo=${codigosAudio.joinToString(",")}"
+                )
+            }
             bufferedMs = player.bufferedPosition.coerceAtLeast(positionMs)
             isPlaying = player.isPlaying
             if (!isLive && durationMs > 0 &&
@@ -779,6 +1106,34 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
             }
         }
 
+        // Recuperación de imagen en curso: se avisa arriba, sin tapar el vídeo, para que
+        // se vea que la app está reaccionando y no colgada.
+        if (recuperando && errorMsg == null) {
+            Row(
+                Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 28.dp)
+                    .background(Color.Black.copy(alpha = 0.72f), RoundedCornerShape(24.dp))
+                    // Se puede tocar: abre los ajustes, donde está el decodificador y el
+                    // informe. La opción no debe quedar escondida justo cuando hace falta.
+                    .clickable { touchControls(); verAjustes = true }
+                    .padding(horizontal = 18.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                androidx.compose.material3.CircularProgressIndicator(
+                    modifier = Modifier.size(16.dp),
+                    color = MaterialTheme.colorScheme.primary,
+                    strokeWidth = 2.dp,
+                )
+                Spacer(Modifier.size(10.dp))
+                Text(
+                    "Ajustando la imagen… (toca para ajustes)",
+                    color = Color.White,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        }
+
         // Ojo: con AnimatedVisibility + slideInVertically el panel quedaba pintado unos
         // 50 dp por encima de su zona táctil, así que los botones «no respondían» (#19).
         // Ahora sólo se anima la opacidad: dibujo y toques siempre coinciden.
@@ -919,17 +1274,41 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
 
     if (verAjustes) {
         PlayerSettingsDialog(
+            pistasAudio = pistasAudio,
+            audioElegido = audioElegido,
+            audioAuto = indiceAudioAuto(),
             audios = audios,
-            idiomaAudio = idiomaAudio,
+            idiomaAuto = idiomaAuto(),
             subtitulos = subtitulos,
             pistaSub = pistaSub,
             escalaSub = escalaSub,
-            onAudio = {
-                idiomaAudio = it
-                com.xuperclean.mobile.data.WatchStore.audioLanguage = it
+            modoVideo = modoVideo,
+            onAudio = { pista ->
+                audioElegido = pista.posicion
+                com.xuperclean.mobile.data.WatchStore.saveAudioIndex(idContenido, pista.posicion)
+                aplicarPistaAudio(pista)
             },
+            onIdioma = { codigo -> aplicarIdioma(codigo) },
             onSubtitulo = { pistaSub = it },
             onEscala = { escalaSub = it },
+            onModoVideo = { nuevo ->
+                if (nuevo != modoVideo) {
+                    Diag.i("Vídeo: modo elegido a mano: $nuevo")
+                    reanudarEn = maxOf(player.currentPosition, ultimaPosicionValida)
+                    modoVideo = nuevo
+                    PlaybackPrefs.modoVideo = nuevo
+                    if (nuevo == PlaybackPrefs.ModoVideo.SOFTWARE) {
+                        // Se comprueba igual que si lo hubiera elegido la app: en un
+                        // aparato lento el software puede no dar abasto.
+                        vigilante.iniciarPruebaSoftware(
+                            android.os.SystemClock.elapsedRealtime(),
+                            diagnostico.descartados,
+                            automatica = false,
+                        )
+                    }
+                }
+            },
+            onCopiarInforme = { copiarInforme() },
             onDismiss = { verAjustes = false },
         )
     }
@@ -1003,14 +1382,21 @@ private fun formatTime(ms: Long): String {
 /** Ajustes en reproducción: audio, subtítulos y tamaño del texto. */
 @Composable
 private fun PlayerSettingsDialog(
+    pistasAudio: List<PistaAudio>,
+    audioElegido: Int,
+    audioAuto: Int,
     audios: List<com.xuperclean.core.AudioTrack>,
-    idiomaAudio: String,
+    idiomaAuto: String?,
     subtitulos: List<SubtitleTrack>,
     pistaSub: String?,
     escalaSub: Float,
-    onAudio: (String) -> Unit,
+    modoVideo: PlaybackPrefs.ModoVideo,
+    onAudio: (PistaAudio) -> Unit,
+    onIdioma: (String) -> Unit,
     onSubtitulo: (String?) -> Unit,
     onEscala: (Float) -> Unit,
+    onModoVideo: (PlaybackPrefs.ModoVideo) -> Unit,
+    onCopiarInforme: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     androidx.compose.material3.AlertDialog(
@@ -1018,24 +1404,65 @@ private fun PlayerSettingsDialog(
         title = { Text("Reproducción") },
         text = {
             Column(
-                Modifier.padding(vertical = 4.dp),
+                Modifier
+                    // El contenido puede no caber en pantallas pequeñas; sin esto el
+                    // botón del informe quedaba fuera de la vista y era invisible.
+                    .verticalScroll(rememberScrollState())
+                    .padding(vertical = 4.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                if (audios.size > 1) {
+                // Decodificador primero: es la palanca que evita los cuelgues de imagen
+                // del decodificador del fabricante y no debe quedar fuera de la vista.
+                Text("Vídeo", style = MaterialTheme.typography.titleSmall)
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    listOf(
+                        PlaybackPrefs.ModoVideo.AUTO to "Automático",
+                        PlaybackPrefs.ModoVideo.HARDWARE to "Hardware",
+                        PlaybackPrefs.ModoVideo.SOFTWARE to "Software",
+                    ).forEach { (modo, etiqueta) ->
+                        androidx.compose.material3.FilterChip(
+                            selected = modoVideo == modo,
+                            onClick = { onModoVideo(modo) },
+                            label = { Text(etiqueta) },
+                        )
+                    }
+                }
+                // Audio: una entrada por PISTA real del contenedor. Con dos pistas `spa`
+                // aparecen las dos, algo imposible con la lista de idiomas deducida.
+                // Si el contenedor aún no ha publicado ninguna, se usan los idiomas que
+                // declara el portal.
+                val porPista = pistasAudio.isNotEmpty()
+                if (porPista || audios.size > 1) {
                     Text("Audio", style = MaterialTheme.typography.titleSmall)
-                    // Chips en una fila desplazable: el diálogo no crece sin límite.
                     Row(
                         Modifier
                             .fillMaxWidth()
                             .horizontalScroll(rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        audios.forEach { pista ->
-                            androidx.compose.material3.FilterChip(
-                                selected = pista.code == idiomaAudio,
-                                onClick = { onAudio(pista.code) },
-                                label = { Text(pista.label) },
-                            )
+                        if (porPista) {
+                            val activa = if (audioElegido >= 0) audioElegido else audioAuto
+                            pistasAudio.forEach { pista ->
+                                androidx.compose.material3.FilterChip(
+                                    selected = activa == pista.posicion,
+                                    onClick = { onAudio(pista) },
+                                    label = { Text(pista.etiqueta) },
+                                )
+                            }
+                        } else {
+                            val activo = idiomaAuto.orEmpty()
+                            audios.forEach { idioma ->
+                                androidx.compose.material3.FilterChip(
+                                    selected = activo == idioma.code,
+                                    onClick = { onIdioma(idioma.code) },
+                                    label = { Text(idioma.label) },
+                                )
+                            }
                         }
                     }
                 }
@@ -1070,12 +1497,13 @@ private fun PlayerSettingsDialog(
                         valueRange = 0.7f..1.8f,
                         steps = 10,
                     )
-                } else {
-                    Text(
-                        "Este título no incluye subtítulos.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                }
+
+                androidx.compose.material3.OutlinedButton(
+                    onClick = onCopiarInforme,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Copiar informe de reproducción")
                 }
             }
         },
@@ -1237,4 +1665,131 @@ private class DiagnosticoListener : AnalyticsListener {
     override fun onPlayerError(eventTime: AnalyticsListener.EventTime, error: PlaybackException) {
         Diag.w("ERROR de reproducción ${error.errorCodeName}: ${error.message}", error)
     }
+}
+
+/** Espera entre escalones de recuperación de imagen. */
+private const val ESPERA_PASO = 2_500L
+
+/**
+ * Memoria del vigilante de imagen.
+ *
+ * Vive fuera del motor a propósito: una reconstrucción del reproductor (paso 2) no debe
+ * borrar lo aprendido, porque volver a empezar por el paso más barato es justo lo que
+ * producía ciclos de congelación y reanudación cada minuto.
+ */
+private class VigilanteImagen {
+    var enCurso = false
+    var paso = -1
+    var ultimaAccion = 0L
+    var ultimoSalto = 0L
+
+    /** Congelamientos atendidos dentro de la ventana actual. */
+    var episodios = 0
+    private var ventana = 0L
+
+    var fuenteCambiada = false
+
+    /** El decodificador software ya se probó y no daba abasto. */
+    var softwareDescartado = false
+
+    /** Fin de la prueba de rendimiento del decodificador software (0 = sin prueba). */
+    var pruebaHasta = 0L
+    var descartesPrueba = 0
+
+    /** Solo se revierte lo que eligió la app: una elección del usuario se respeta. */
+    var pruebaAutomatica = false
+
+    /** Empieza a medir si el decodificador software mantiene el ritmo. */
+    fun iniciarPruebaSoftware(ahora: Long, descartes: Int, automatica: Boolean) {
+        pruebaHasta = ahora + 25_000L
+        descartesPrueba = descartes
+        pruebaAutomatica = automatica
+    }
+
+    fun registrarEpisodio() {
+        val ahora = android.os.SystemClock.elapsedRealtime()
+        if (ahora - ventana > VENTANA) {
+            ventana = ahora
+            episodios = 0
+        }
+        episodios++
+    }
+
+    /**
+     * Primer paso de un congelamiento nuevo. Si ya se han atendido dos en cinco minutos
+     * el problema no es puntual: se va directo al decodificador software, que es lo que
+     * arregló el caso en el aparato real, en vez de repetir el retroceso.
+     */
+    fun pasoInicial(): Int = if (episodios >= 2) 1 else 0
+
+    private companion object {
+        const val VENTANA = 300_000L
+    }
+}
+
+/** «1080p» → 1080; null si la etiqueta de la fuente no trae resolución. */
+private fun calidadDe(fuente: VodStream?): Int? {
+    val variante = fuente?.variant ?: return null
+    val texto = listOfNotNull(variante.quality, variante.videoFormat, fuente.label)
+        .joinToString(" ")
+    return Regex("(\\d{3,4})").findAll(texto)
+        .mapNotNull { coincidencia -> coincidencia.groupValues[1].toIntOrNull() }
+        .maxOrNull()
+        ?.takeIf { it in 144..4320 }
+}
+/**
+ * Una pista de audio real del contenedor.
+ *
+ * Media3 publica un grupo por PID de audio del TS, casi siempre de un solo índice, así
+ * que la pista se identifica por [grupo] + [indice] y se ordena con [posicion].
+ */
+private data class PistaAudio(
+    val grupo: androidx.media3.common.TrackGroup,
+    val indice: Int,
+    val posicion: Int,
+    val etiqueta: String,
+)
+
+/** Códigos del `audioInfo` en orden y SIN deduplicar: cada uno es una pista del TS. */
+private fun codigosDeAudio(audioInfo: String?): List<String> {
+    if (audioInfo.isNullOrBlank()) return emptyList()
+    return audioInfo.split(',', ';', '/', '|')
+        .mapNotNull { com.xuperclean.core.AudioTracks.normalize(it) }
+}
+
+/**
+ * Pistas de audio que el extractor encontró en el `_media.ts`.
+ *
+ * El contenedor etiqueta las pistas `spa`/`eng`, pero cuando hay dos `spa` (latino y
+ * castellano) no las distingue. La etiqueta se completa con la POSICIÓN dentro del
+ * `audioInfo`, que es el mismo orden del PMT y lo único que permite separarlas.
+ */
+private fun pistasDeAudio(player: Player, codigos: List<String>): List<PistaAudio> {
+    val grupos = player.currentTracks.groups.filter {
+        it.type == androidx.media3.common.C.TRACK_TYPE_AUDIO
+    }
+    if (grupos.isEmpty()) return emptyList()
+    val repetidos = mutableMapOf<String, Int>()
+    val lista = ArrayList<PistaAudio>()
+    for (grupo in grupos) {
+        for (i in 0 until grupo.length) {
+            if (!grupo.isTrackSupported(i)) continue
+            val formato = grupo.getTrackFormat(i)
+            val posicion = lista.size
+            val base = codigos.getOrNull(posicion)
+                ?.let { com.xuperclean.core.AudioTracks.label(it) }
+                ?: formato.language?.let { com.xuperclean.core.AudioTracks.label(it) }
+                ?: formato.label
+                ?: "Pista ${posicion + 1}"
+            val veces = (repetidos[base] ?: 0) + 1
+            repetidos[base] = veces
+            lista += PistaAudio(
+                grupo = grupo.mediaTrackGroup,
+                indice = i,
+                posicion = posicion,
+                etiqueta = if (veces > 1) "$base $veces" else base,
+            )
+        }
+    }
+    return lista
 }

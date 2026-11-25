@@ -1,4 +1,4 @@
-﻿package com.xuperclean.core
+package com.xuperclean.core
 
 /**
  * ConfiguraciÃ³n del cliente portal. Valores por defecto = los observados y verificados
@@ -9,9 +9,8 @@ public data class XuperConfig(
     var sn: String,
     /** Hosts del portal (rotan por DCS; el cliente prueba en orden). */
     var portalHosts: List<String> = listOf(
-        "brkhzs.udigkkrc.com",
-        "eslitx.7jpeq68c.com",
-        "fuxok.nguvmqhpk.com",
+        "eajmnp.hcgv1dt8.com",
+        "krdwvd.swcaw7qx.com",
     ),
     /** build interno del APK en la cabecera apkVer (NO el versionCode). */
     var apkVerHeader: String = "43404",

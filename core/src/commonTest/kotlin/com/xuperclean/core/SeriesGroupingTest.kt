@@ -32,6 +32,19 @@ class SeriesGroupingTest {
     }
 
     @Test
+    fun `la temporada tambien sale del nombre del episodio`() {
+        assertEquals(2, SeriesGrouping.seasonFromEpisode("Star vs. the Forces of Evil Season 2 - 1"))
+        assertEquals(2, SeriesGrouping.seasonFromEpisode("Star vs. las fuerzas del mal T2_1"))
+        assertEquals(6, SeriesGrouping.seasonFromEpisode("Historias corrientes T6_1"))
+        assertEquals(1, SeriesGrouping.seasonFromEpisode("ONZE: Nueva generación T1_8"))
+        assertEquals(null, SeriesGrouping.seasonFromEpisode("Episodio 5"))
+        assertEquals(null, SeriesGrouping.seasonFromEpisode(null))
+        // Un nombre sin sufijo no finge una temporada.
+        assertEquals(null, SeriesGrouping.seasonOrNull("Star vs. the Forces of Evil"))
+        assertEquals(2, SeriesGrouping.seasonOrNull("Star vs. the Forces of Evil Season 2"))
+    }
+
+    @Test
     fun `detecta las variantes temp y season del portal`() {
         assertEquals(2, SeriesGrouping.seasonNumber("Master of None Temp.2"))
         assertEquals(1, SeriesGrouping.seasonNumber("Underwear Temp.1"))
@@ -160,6 +173,58 @@ class SeriesGroupingTest {
         assertEquals("Un Show Más", serieUnica.title)
         assertEquals("a1", serieUnica.asset.contentId)
         assertEquals("Un Show Más", serieUnica.cardAsset.name)
+    }
+
+    @Test
+    fun `la copia doblada da el nombre visible de la temporada`() {
+        val grupos = SeriesGrouping.group(
+            listOf(
+                VodAsset(
+                    contentId = "original",
+                    name = "Star vs. the Forces of Evil Temp.2",
+                    type = "0",
+                    programType = "teleplay",
+                    alias = "Star vs. the Forces of Evil S2",
+                ),
+                VodAsset(
+                    contentId = "doblada",
+                    name = "Star vs. las fuerzas del mal T2",
+                    type = "0",
+                    programType = "teleplay",
+                    alias = "Star vs. the Forces of Evil S2",
+                ),
+            ),
+        )
+        assertEquals(1, grupos.size)
+        val temporada = grupos.single().seasons.single()
+        assertEquals("doblada", temporada.asset.contentId)
+        assertEquals(listOf("original"), temporada.variantes.map { it.contentId })
+        assertEquals("Star vs. las fuerzas del mal", grupos.single().displayName)
+    }
+
+    @Test
+    fun `una temporada duplicada devuelve una sola ficha en la busqueda`() {
+        val resultados = SeriesGrouping.searchResults(
+            listOf(
+                VodAsset(
+                    contentId = "original",
+                    name = "Star vs. the Forces of Evil Temp.2",
+                    type = "0",
+                    programType = "teleplay",
+                    alias = "Star vs. the Forces of Evil S2",
+                ),
+                VodAsset(
+                    contentId = "doblada",
+                    name = "Star vs. las fuerzas del mal T2",
+                    type = "0",
+                    programType = "teleplay",
+                    alias = "Star vs. the Forces of Evil S2",
+                ),
+            ),
+        )
+        assertEquals(1, resultados.size)
+        assertEquals("Star vs. las fuerzas del mal", resultados.single().title)
+        assertEquals("doblada", resultados.single().asset.contentId)
     }
 
     @Test

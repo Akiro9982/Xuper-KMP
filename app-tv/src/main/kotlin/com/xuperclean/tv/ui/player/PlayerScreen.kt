@@ -99,8 +99,26 @@ sealed interface PlayerPayload {
         override val title: String get() = asset.name
     }
 
-    data class Episode(val asset: VodAsset, val episode: EpisodeInfo) : PlayerPayload {
-        override val title: String get() = episode.name ?: asset.name
+    data class Episode(
+        val asset: VodAsset,
+        val episode: EpisodeInfo,
+        /** Nombre visible de la serie; el episodio puede venir de una copia con otro título. */
+        val tituloSerie: String? = null,
+        /** Temporada según la ficha; el asset de la copia no siempre la lleva en el nombre. */
+        val temporada: Int? = null,
+        /** Título original de la serie: una sola tarjeta en «Continuar viendo». */
+        val serieKey: String? = null,
+    ) : PlayerPayload {
+        override val title: String
+            get() = buildString {
+                append(tituloSerie ?: com.xuperclean.core.SeriesGrouping.searchTitle(asset.name))
+                append(" · T")
+                append(
+                    temporada
+                        ?: com.xuperclean.core.SeriesGrouping.seasonNumber(asset.name),
+                )
+                episode.seriesNumber?.takeIf { it > 0 }?.let { append(" · E").append(it) }
+            }
     }
 }
 
@@ -144,6 +162,21 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
     var idiomaAudio by remember(payload) {
         mutableStateOf(com.xuperclean.tv.data.WatchStore.audioLanguage)
     }
+    // Pistas de audio reales del contenedor. El portal solo publica códigos ISO por
+    // pista (`audioInfo`), así que la lista buena sale del propio stream al abrirlo.
+    var pistasAudio by remember(payload) { mutableStateOf<List<PistaAudio>>(emptyList()) }
+    // Códigos ISO en el MISMO orden que las pistas del contenedor (sin deduplicar).
+    var codigosAudio by remember(payload) { mutableStateOf<List<String>>(emptyList()) }
+    // Pista elegida a mano (-1 = automática). Se recuerda por título: cuando el
+    // contenedor trae dos pistas `spa` no hay etiqueta que distinga latino de castellano.
+    var audioElegido by remember(payload) { mutableIntStateOf(-1) }
+    val idContenido = remember(payload) {
+        when (val k = payload) {
+            is PlayerPayload.Vod -> k.asset.contentId
+            is PlayerPayload.Episode -> k.asset.contentId
+            is PlayerPayload.Live -> ""
+        }
+    }
     var subtitulos by remember(payload) { mutableStateOf<List<SubtitleTrack>>(emptyList()) }
     var pistaSub by remember(payload) { mutableStateOf<String?>(null) }
     var escalaSub by remember(payload) { mutableFloatStateOf(1f) }
@@ -166,19 +199,27 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
             is PlayerPayload.Live -> return
         }
         val ep = episodioActual
+        val capitulo = payload as? PlayerPayload.Episode
         val p = com.xuperclean.core.WatchProgress(
             contentId = ep?.contentId ?: asset.contentId,
             assetId = asset.contentId,
-            name = asset.name,
+            name = capitulo?.tituloSerie ?: asset.name,
             type = if (asset.isSeries) "0" else "1",
             isSeries = asset.isSeries,
             posterUrl = asset.posterList.firstOrNull()?.fileUrl,
             episodeId = ep?.contentId,
             episodeNumber = ep?.seriesNumber,
             episodeName = ep?.name,
-            seasonNumber = if (asset.isSeries) {
-                com.xuperclean.core.SeriesGrouping.seasonNumber(asset.name)
-            } else null,
+            seasonNumber = when {
+                !asset.isSeries -> null
+                // La ficha ya sabe en qué temporada está: no se adivina por el nombre
+                // del asset, que en la copia original puede no llevarla.
+                capitulo?.temporada != null -> capitulo.temporada
+                else -> com.xuperclean.core.SeriesGrouping.seasonNumber(asset.name)
+            },
+            aliasKey = capitulo?.serieKey
+                ?: asset.alias?.takeIf { it.isNotBlank() }
+                    ?.let { com.xuperclean.core.SeriesGrouping.baseName(it) },
             positionMs = posMs,
             durationMs = durMs,
             updatedAt = System.currentTimeMillis(),
@@ -186,7 +227,7 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
         if (com.xuperclean.core.WatchProgress.isResumable(posMs, durMs)) {
             com.xuperclean.tv.data.WatchStore.save(p)
         } else if (posMs.toDouble() / durMs >= 0.95) {
-            com.xuperclean.tv.data.WatchStore.remove(asset.contentId)
+            com.xuperclean.tv.data.WatchStore.remove(p.clave)
         }
     }
 
@@ -194,6 +235,9 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
     fun usarFuente(url: String, headers: Map<String, String>) {
         cabeceras.clear()
         cabeceras.putAll(headers)
+        // Al cambiar de fuente el motor resuelve pistas nuevas y los índices de audio
+        // viejos dejan de valer: se vuelven a leer del stream y se reaplica la elección.
+        pistasAudio = emptyList()
         streamUrl = url
     }
 
@@ -257,6 +301,8 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
                     else {
                         fuentes = opciones
                         audios = XuperRepository.audio(ticket)
+                        codigosAudio = codigosDeAudio(primera.variant.audioInfo)
+                        audioElegido = com.xuperclean.tv.data.WatchStore.audioIndex(idContenido)
                         subtitulos = XuperRepository.subtitles(ticket)
                         usarFuente(primera.url, primera.headers)
                         alternativas = opciones.drop(1).map { it.url to it.headers }
@@ -280,6 +326,8 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
                     else {
                         fuentes = opciones
                         audios = XuperRepository.audio(ticket)
+                        codigosAudio = codigosDeAudio(primera.variant.audioInfo)
+                        audioElegido = com.xuperclean.tv.data.WatchStore.audioIndex(idContenido)
                         subtitulos = XuperRepository.subtitles(ticket)
                         usarFuente(primera.url, primera.headers)
                         alternativas = opciones.drop(1).map { it.url to it.headers }
@@ -332,6 +380,12 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
                             reanudarEn = 0L
                         }
                     }
+
+                    override fun onTracksChanged(tracks: androidx.media3.common.Tracks) {
+                        // El contenedor ya publicó sus pistas: la lista real sustituye a
+                        // los códigos del portal para que la elección sea por posición.
+                        pistasAudio = pistasDeAudio(tracks, codigosAudio)
+                    }
                 })
             }
     }
@@ -377,10 +431,36 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
             .build()
     }
 
-    // Audio: el mismo stream trae varias pistas y el contenedor no marca ninguna como
-    // predeterminada, así que la preferencia (por defecto latino) se aplica siempre.
-    LaunchedEffect(player, idiomaAudio, pendingUrl) {
-        if (audios.isEmpty()) return@LaunchedEffect
+    /**
+     * Audio: el contenedor no marca ninguna pista como predeterminada y a veces trae dos
+     * `spa` (latino y castellano) sin etiqueta que las distinga. La elección se hace por
+     * POSICIÓN: la guardada a mano manda; si no hay, la primera pista española es latino.
+     * Se reaplica al cambiar de fuente y al llegar la lista real de pistas.
+     */
+    LaunchedEffect(player, pendingUrl, pistasAudio, audioElegido, idiomaAudio) {
+        if (pendingUrl == null) return@LaunchedEffect
+        val lista = pistasAudio
+        if (lista.isEmpty()) return@LaunchedEffect
+        val indice = if (audioElegido in lista.indices) {
+            audioElegido
+        } else {
+            indiceAudioAuto(lista, codigosAudio, idiomaAudio)
+        }
+        val pista = lista.getOrNull(indice) ?: return@LaunchedEffect
+        player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
+            .setTrackTypeDisabled(androidx.media3.common.C.TRACK_TYPE_AUDIO, false)
+            .clearOverridesOfType(androidx.media3.common.C.TRACK_TYPE_AUDIO)
+            .addOverride(
+                androidx.media3.common.TrackSelectionOverride(pista.grupo, listOf(pista.indice)),
+            )
+            .build()
+    }
+
+    // Respaldo cuando el extractor solo expone una pista (o ninguna): se pide el idioma
+    // y deja decidir a Media3, como se hacía antes del arreglo por posición.
+    LaunchedEffect(player, idiomaAudio, pendingUrl, pistasAudio) {
+        if (pendingUrl == null) return@LaunchedEffect
+        if (pistasAudio.size > 1 || audios.size <= 1) return@LaunchedEffect
         val cadena = com.xuperclean.core.AudioTracks.preferenceChain(idiomaAudio)
         player.trackSelectionParameters = player.trackSelectionParameters.buildUpon()
             .setTrackTypeDisabled(androidx.media3.common.C.TRACK_TYPE_AUDIO, false)
@@ -709,10 +789,18 @@ fun PlayerScreen(payload: PlayerPayload, onClose: () -> Unit) {
         TvSettingsOverlay(
             audios = audios,
             idiomaAudio = idiomaAudio,
+            pistasAudio = pistasAudio,
+            // Un índice guardado de otra variante puede no existir: se muestra como auto.
+            audioElegido = if (audioElegido in pistasAudio.indices) audioElegido else -1,
+            audioAuto = indiceAudioAuto(pistasAudio, codigosAudio, idiomaAudio),
             subtitulos = subtitulos,
             pistaSub = pistaSub,
             escalaSub = escalaSub,
             ajusteImagen = ajusteImagen,
+            onAudioPista = { pista ->
+                audioElegido = pista.posicion
+                com.xuperclean.tv.data.WatchStore.saveAudioIndex(idContenido, pista.posicion)
+            },
             onAudio = {
                 idiomaAudio = it
                 com.xuperclean.tv.data.WatchStore.audioLanguage = it
@@ -742,10 +830,14 @@ private fun formatTime(ms: Long): String {
 private fun TvSettingsOverlay(
     audios: List<com.xuperclean.core.AudioTrack>,
     idiomaAudio: String,
+    pistasAudio: List<PistaAudio>,
+    audioElegido: Int,
+    audioAuto: Int,
     subtitulos: List<SubtitleTrack>,
     pistaSub: String?,
     escalaSub: Float,
     ajusteImagen: AjusteImagen,
+    onAudioPista: (PistaAudio) -> Unit,
     onAudio: (String) -> Unit,
     onSubtitulo: (String?) -> Unit,
     onEscala: (Float) -> Unit,
@@ -792,7 +884,26 @@ private fun TvSettingsOverlay(
                     .verticalScroll(androidx.compose.foundation.rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-            if (audios.size > 1) {
+            val hayPistas = pistasAudio.isNotEmpty()
+            if (hayPistas) {
+                Text("Audio", style = MaterialTheme.typography.titleSmall, color = Color.White)
+                pistasAudio.forEachIndexed { i, pista ->
+                    val activa = if (audioElegido >= 0) audioElegido == i else i == audioAuto
+                    val enfocar = if (i == 0) Modifier.focusRequester(primerFoco) else Modifier
+                    TvSurface(
+                        onClick = { onAudioPista(pista) },
+                        colors = settingsColors,
+                        modifier = enfocar.fillMaxWidth(),
+                    ) {
+                        Text(
+                            text = if (activa) "● ${pista.etiqueta}" else pista.etiqueta,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = if (activa) MaterialTheme.colorScheme.primary else Color.White,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                        )
+                    }
+                }
+            } else if (audios.size > 1) {
                 Text("Audio", style = MaterialTheme.typography.titleSmall, color = Color.White)
                 audios.forEachIndexed { i, pista ->
                     val enfocar = if (i == 0) Modifier.focusRequester(primerFoco) else Modifier
@@ -814,7 +925,7 @@ private fun TvSettingsOverlay(
             Text("Imagen", style = MaterialTheme.typography.titleSmall, color = Color.White)
             AjusteImagen.entries.forEachIndexed { i, modo ->
                 // Si no hay idiomas que listar, el foco inicial cae aquí.
-                val enfocar = if (i == 0 && audios.size <= 1) Modifier.focusRequester(primerFoco) else Modifier
+                val enfocar = if (i == 0 && !hayPistas && audios.size <= 1) Modifier.focusRequester(primerFoco) else Modifier
                 TvSurface(
                     onClick = { onAjusteImagen(modo) },
                     colors = settingsColors,
@@ -868,12 +979,6 @@ private fun TvSettingsOverlay(
                         Text("A+")
                     }
                 }
-            } else {
-                Text(
-                    "Este título no incluye subtítulos.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = Color.White.copy(alpha = 0.7f),
-                )
             }
                 Spacer(Modifier.height(8.dp))
             }
@@ -1030,4 +1135,85 @@ private fun BarraProgreso(
             drawCircle(color = Color.White, radius = 3.dp.toPx(), center = Offset(size.width * f, size.height / 2f))
         }
     }
+
+}
+
+/**
+ * Una pista de audio real del contenedor.
+ *
+ * Media3 publica un grupo por PID de audio del TS, casi siempre de un solo índice, así
+ * que la pista se identifica por [grupo] + [indice] y se ordena con [posicion].
+ */
+private data class PistaAudio(
+    val grupo: androidx.media3.common.TrackGroup,
+    val indice: Int,
+    val posicion: Int,
+    val etiqueta: String,
+)
+
+/** Códigos del `audioInfo` en orden y SIN deduplicar: cada uno es una pista del TS. */
+private fun codigosDeAudio(audioInfo: String?): List<String> {
+    if (audioInfo.isNullOrBlank()) return emptyList()
+    return audioInfo.split(',', ';', '/', '|')
+        .mapNotNull { com.xuperclean.core.AudioTracks.normalize(it) }
+}
+
+/**
+ * Pistas de audio que el extractor encontró en el `_media.ts`.
+ *
+ * El contenedor etiqueta las pistas `spa`/`eng`, pero cuando hay dos `spa` (latino y
+ * castellano) no las distingue. La etiqueta se completa con la POSICIÓN dentro del
+ * `audioInfo`, que es el mismo orden del PMT y lo único que permite separarlas.
+ */
+private fun pistasDeAudio(
+    tracks: androidx.media3.common.Tracks,
+    codigos: List<String>,
+): List<PistaAudio> {
+    val grupos = tracks.groups.filter {
+        it.type == androidx.media3.common.C.TRACK_TYPE_AUDIO
+    }
+    if (grupos.isEmpty()) return emptyList()
+    val repetidos = mutableMapOf<String, Int>()
+    val lista = ArrayList<PistaAudio>()
+    for (grupo in grupos) {
+        for (i in 0 until grupo.length) {
+            if (!grupo.isTrackSupported(i)) continue
+            val formato = grupo.getTrackFormat(i)
+            val posicion = lista.size
+            val base = codigos.getOrNull(posicion)
+                ?.let { com.xuperclean.core.AudioTracks.label(it) }
+                ?: formato.language?.let { com.xuperclean.core.AudioTracks.label(it) }
+                ?: formato.label
+                ?: "Pista ${posicion + 1}"
+            val veces = (repetidos[base] ?: 0) + 1
+            repetidos[base] = veces
+            lista += PistaAudio(
+                grupo = grupo.mediaTrackGroup,
+                indice = i,
+                posicion = posicion,
+                etiqueta = if (veces > 1) "$base $veces" else base,
+            )
+        }
+    }
+    return lista
+}
+
+/**
+ * Índice de audio de la preferencia guardada, leído del `audioInfo` del título.
+ *
+ * El portal publica los códigos en el mismo orden que las pistas del `_media.ts`, así
+ * que la posición es la única información fiable para el latino. Sin coincidencia se
+ * usa la primera pista, igual que la app original.
+ */
+private fun indiceAudioAuto(
+    pistas: List<PistaAudio>,
+    codigos: List<String>,
+    idioma: String,
+): Int {
+    if (pistas.isEmpty()) return 0
+    for (codigo in com.xuperclean.core.AudioTracks.preferenceChain(idioma)) {
+        val i = codigos.indexOf(codigo)
+        if (i >= 0 && i < pistas.size) return i
+    }
+    return 0
 }

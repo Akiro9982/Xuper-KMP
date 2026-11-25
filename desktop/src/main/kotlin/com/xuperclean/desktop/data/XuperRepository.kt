@@ -2,6 +2,9 @@ package com.xuperclean.desktop.data
 
 import com.xuperclean.core.NexusPortal
 import com.xuperclean.core.PortalProfile
+import com.xuperclean.core.SeasonCopy
+import com.xuperclean.core.SeasonEpisode
+import com.xuperclean.core.SeasonMerge
 import com.xuperclean.core.TextIdentityStore
 import com.xuperclean.core.XuperException
 import com.xuperclean.core.crypto.XuperCrypto
@@ -12,6 +15,7 @@ import com.xuperclean.core.SubtitleTracks
 import com.xuperclean.core.XuperConfig
 import com.xuperclean.core.XuperPortalClient
 import com.xuperclean.core.model.ActiveData
+import com.xuperclean.core.model.AssetData
 import com.xuperclean.core.model.Channel
 import com.xuperclean.core.model.ColumnInfo
 import com.xuperclean.core.model.MovieVariant
@@ -22,6 +26,9 @@ import com.xuperclean.core.model.SlbInfo
 import com.xuperclean.core.model.VodAsset
 import com.xuperclean.core.net.JvmHttpEngine
 import com.xuperclean.desktop.net.NetProvider
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlin.random.Random
@@ -191,6 +198,39 @@ object XuperRepository {
             candidatos += encontrados
         }
         return agrupador.seasonsOf(candidatos.distinctBy { it.contentId }, asset)
+    }
+
+    /**
+     * Episodios de una temporada **fusionando todas sus copias**.
+     *
+     * El portal publica la misma temporada dos veces: la original (`Star vs. the Forces
+     * of Evil Temp.2`, con más idiomas y las dos pistas en español) y la doblada (`Star
+     * vs. las fuerzas del mal T2`, con más episodios). Ninguna está completa, así que la
+     * ficha muestra una sola lista: un episodio por número, tomado de la copia con mejor
+     * audio, y conservando los números que solo publica una de ellas.
+     *
+     * [principal] ya está cargada por la ficha; de las copias solo se piden sus datos.
+     */
+    suspend fun episodiosDeTemporada(
+        principal: AssetData,
+        copias: List<VodAsset>,
+    ): List<SeasonEpisode> {
+        val otras = copias.distinctBy { it.contentId }
+            .filter { it.contentId != principal.contentId }
+        val detalles = coroutineScope {
+            otras.map { copia ->
+                async {
+                    copia to runCatching { itemData(copia.contentId, "0") }.getOrNull()
+                }
+            }.awaitAll()
+        }
+        val todas = buildList {
+            add(SeasonCopy(principal.toVodAsset(), principal.audioInfo, principal.simpleProgramList))
+            detalles.forEach { (asset, detalle) ->
+                detalle?.let { add(SeasonCopy(asset, it.audioInfo, it.simpleProgramList)) }
+            }
+        }
+        return SeasonMerge.merge(todas)
     }
 
     suspend fun itemData(contentId: String, type: String) =

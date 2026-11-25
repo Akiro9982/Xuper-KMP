@@ -34,8 +34,8 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.xuperclean.core.SeasonEntry
+import com.xuperclean.core.SeasonEpisode
 import com.xuperclean.core.SeriesGrouping
-import com.xuperclean.core.model.EpisodeInfo
 import com.xuperclean.core.model.VodAsset
 import com.xuperclean.mobile.data.XuperRepository
 import com.xuperclean.mobile.ui.Header
@@ -76,11 +76,31 @@ fun DetailScreen(
             val data = full.toVodAsset().let { base ->
                 if (base.posterList.isEmpty()) base.copy(posterList = asset.posterList) else base
             }
+            val listaTemporadas = (temporadas as? UiState.Ready)?.value.orEmpty()
+            // Copias de la temporada abierta: la entrada del grupo y sus variantes.
+            val copias = remember(listaTemporadas, actual.contentId) {
+                listaTemporadas.firstOrNull { entrada ->
+                    entrada.asset.contentId == actual.contentId ||
+                        entrada.variantes.any { it.contentId == actual.contentId }
+                }.let { entrada ->
+                    entrada?.let { listOf(it.asset) + it.variantes }.orEmpty()
+                        .filter { it.contentId != actual.contentId }
+                }
+            }
+            val fusion = rememberAsync(
+                "episodes-${actual.contentId}-${copias.joinToString(",") { it.contentId }}",
+            ) {
+                XuperRepository.episodiosDeTemporada(full, copias)
+            }
+            // Mientras se fusionan las copias se pinta la temporada abierta tal cual: el
+            // recuento solo puede crecer, así que no hay saltos ni episodios que se pierdan.
+            val episodios = (fusion as? UiState.Ready)?.value
+                ?: full.simpleProgramList.map { SeasonEpisode(it, actual) }
             DetailContent(
                 asset = data,
-                episodios = full.simpleProgramList,
+                episodios = episodios,
                 isSeries = isSeries,
-                temporadas = (temporadas as? UiState.Ready)?.value.orEmpty(),
+                temporadas = listaTemporadas,
                 onSelectSeason = { actual = it },
                 onPlay = onPlay,
                 onOpenAsset = onOpenAsset,
@@ -92,13 +112,53 @@ fun DetailScreen(
 @Composable
 private fun DetailContent(
     asset: VodAsset,
-    episodios: List<EpisodeInfo>,
+    episodios: List<SeasonEpisode>,
     isSeries: Boolean,
     temporadas: List<SeasonEntry>,
     onSelectSeason: (VodAsset) -> Unit,
     onPlay: (PlayerPayload) -> Unit,
     onOpenAsset: (VodAsset) -> Unit,
 ) {
+    // El episodio puede venir de la copia original (nombre en otro idioma): el
+    // reproductor muestra el nombre de la temporada que ve el usuario.
+    // Cada capítulo vive en una copia concreta (la doblada o la original), así que la
+    // temporada y el nombre visible se toman de la ficha y no del nombre del asset.
+    // El alias identifica la serie aunque cada temporada cambie de doblaje.
+    val serieKey = remember(temporadas) {
+        temporadas.firstNotNullOfOrNull { entrada ->
+            entrada.asset.alias?.takeIf { it.isNotBlank() }
+        }?.let { SeriesGrouping.baseName(it) }
+    }
+    val temporadaPorCopia = remember(temporadas) {
+        buildMap {
+            temporadas.forEach { entrada ->
+                put(entrada.asset.contentId, entrada)
+                entrada.variantes.forEach { put(it.contentId, entrada) }
+            }
+        }
+    }
+    // La ficha manda: la copia abierta puede ser la original (nombre en otro idioma) y
+    // no llevar la temporada en el nombre.
+    val entradaActual = temporadaPorCopia[asset.contentId]
+    val nombreVisible = SeriesGrouping.searchTitle(entradaActual?.asset?.name ?: asset.name)
+    val temporadaActual = entradaActual?.number
+        ?: SeriesGrouping.seasonOrNull(asset.name)
+    val reproducir: (PlayerPayload) -> Unit = { destino ->
+        onPlay(
+            when (destino) {
+                is PlayerPayload.Episode -> {
+                    val entrada = temporadaPorCopia[destino.asset.contentId]
+                    destino.copy(
+                        tituloSerie = entrada?.let { SeriesGrouping.searchTitle(it.asset.name) }
+                            ?: nombreVisible,
+                        temporada = entrada?.number,
+                        serieKey = serieKey,
+                    )
+                }
+                else -> destino
+            },
+        )
+    }
     BoxWithConstraints(Modifier.fillMaxSize()) {
     val separacionEp = 8.dp
     val columnasEp = ((maxWidth - 32.dp + separacionEp) / (104.dp + separacionEp)).toInt().coerceAtLeast(3)
@@ -122,7 +182,7 @@ private fun DetailContent(
                         .padding(16.dp),
                 ) {
                     Text(
-                        text = asset.name,
+                        text = nombreVisible,
                         style = MaterialTheme.typography.headlineSmall,
                         color = Color.White,
                         maxLines = 2,
@@ -135,7 +195,9 @@ private fun DetailContent(
                         Button(
                             onClick = {
                                 if (isSeries) {
-                                    primero?.let { onPlay(PlayerPayload.Episode(asset, it)) }
+                                    primero?.let {
+                                        reproducir(PlayerPayload.Episode(it.season, it.episode))
+                                    }
                                 } else {
                                     onPlay(PlayerPayload.Vod(asset))
                                 }
@@ -148,8 +210,8 @@ private fun DetailContent(
                         ) {
                             Text(
                                 if (isSeries) {
-                                    "Reproducir T${SeriesGrouping.seasonNumber(asset.name)} " +
-                                        "E${primero?.seriesNumber ?: 1}"
+                                    "Reproducir T${temporadaActual ?: 1} " +
+                                        "E${primero?.episode?.seriesNumber ?: 1}"
                                 } else {
                                     "Reproducir"
                                 },
@@ -189,7 +251,7 @@ private fun DetailContent(
                     ) {
                         items(temporadas, key = { it.asset.contentId }) { temporada ->
                             FilterChip(
-                                selected = temporada.asset.contentId == asset.contentId,
+                                selected = temporada.number == (temporadaActual ?: 1),
                                 onClick = { onSelectSeason(temporada.asset) },
                                 label = { Text(temporada.label) },
                             )
@@ -214,10 +276,7 @@ private fun DetailContent(
                         color = MaterialTheme.colorScheme.onSurface,
                     )
                     Text(
-                        listOfNotNull(
-                            temporadas.firstOrNull { it.asset.contentId == asset.contentId }?.label,
-                            "${episodios.size} episodios",
-                        ).joinToString(" · "),
+                        "T${temporadaActual ?: 1} · ${episodios.size} episodios",
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -232,7 +291,7 @@ private fun DetailContent(
                 ) {
                     eps.forEachIndexed { columna, ep ->
                         Box(Modifier.width(anchoEp)) {
-                            EpisodeCard(asset, ep, fila * columnasEp + columna + 1, onPlay)
+                            EpisodeCard(ep, fila * columnasEp + columna + 1, reproducir)
                         }
                     }
                 }
@@ -267,14 +326,13 @@ private fun MetaLine(asset: VodAsset) {
  */
 @Composable
 private fun EpisodeCard(
-    asset: VodAsset,
-    ep: EpisodeInfo,
+    ep: SeasonEpisode,
     indice: Int,
     onPlay: (PlayerPayload) -> Unit,
 ) {
-    val numero = ep.seriesNumber?.takeIf { it > 0 } ?: indice
+    val numero = ep.episode.seriesNumber?.takeIf { it > 0 } ?: indice
     androidx.compose.material3.Card(
-        onClick = { onPlay(PlayerPayload.Episode(asset, ep)) },
+        onClick = { onPlay(PlayerPayload.Episode(ep.season, ep.episode)) },
         modifier = Modifier
             .fillMaxWidth()
             .height(72.dp),

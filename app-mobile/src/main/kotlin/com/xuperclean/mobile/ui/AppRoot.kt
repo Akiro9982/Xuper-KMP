@@ -37,6 +37,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.xuperclean.core.WatchProgress
+import com.xuperclean.core.model.EpisodeInfo
 import com.xuperclean.core.model.VodAsset
 import com.xuperclean.core.update.UpdateState
 import com.xuperclean.mobile.update.AppUpdates
@@ -58,6 +60,29 @@ sealed class Tab(val label: String) {
 sealed interface Overlay {
     data class Detail(val asset: VodAsset) : Overlay
     data class Player(val payload: PlayerPayload) : Overlay
+}
+
+/**
+ * «Continuar viendo» reabre el capítulo guardado como episodio, con su temporada y su
+ * número reales; si se abriera como película se perderían ambos (#8).
+ */
+private fun WatchProgress.toPlayerPayload(): PlayerPayload {
+    val epId = episodeId
+    return if (isSeries && epId != null) {
+        PlayerPayload.Episode(
+            asset = toVodAsset(),
+            episode = EpisodeInfo(
+                contentId = epId,
+                name = episodeName,
+                seriesNumber = episodeNumber,
+            ),
+            tituloSerie = name,
+            temporada = seasonNumber,
+            serieKey = aliasKey,
+        )
+    } else {
+        PlayerPayload.Vod(toVodAsset())
+    }
 }
 
 private val TABS = listOf(Tab.Inicio, Tab.Live, Tab.Pelicula, Tab.Series, Tab.Explorar, Tab.Ajustes)
@@ -147,7 +172,7 @@ fun AppRoot() {
                 Tab.Inicio -> HomeScreen(
                     onOpenAsset = { a -> stack.add(Overlay.Detail(a)) },
                     // «Continuar viendo» reanuda directamente el capítulo guardado (#8).
-                    onResume = { p -> stack.add(Overlay.Player(PlayerPayload.Vod(p.toVodAsset()))) },
+                    onResume = { p -> stack.add(Overlay.Player(p.toPlayerPayload())) },
                 )
                 Tab.Live -> LiveScreen(onOpenChannel = { payload -> stack.add(Overlay.Player(payload)) })
                 Tab.Pelicula -> CatalogScreen(CatalogKind.Pelicula, onOpenAsset = { a -> stack.add(Overlay.Detail(a)) })
